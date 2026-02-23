@@ -290,7 +290,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - name: Build release binaries
         run: |
-          cargo build --locked --release --target ${{ matrix.target }} \
+          cargo build --release --target ${{ matrix.target }} \
             -p greentic-component --features cli --bins
       - name: Package release archive
         id: package
