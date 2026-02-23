@@ -117,7 +117,24 @@ mod tests {
                 WizardCommand::New(args) => {
                     assert_eq!(args.name, "demo-component");
                     assert_eq!(args.abi_version, "0.6.0");
+                    assert!(!args.plan_json);
                 }
+                WizardCommand::Spec(_) => panic!("expected wizard new args"),
+            },
+            _ => panic!("expected wizard args"),
+        }
+    }
+
+    #[test]
+    fn parses_wizard_spec_subcommand() {
+        let cli = Cli::try_parse_from(["greentic-component", "wizard", "spec", "--mode", "setup"])
+            .expect("expected CLI to parse");
+        match cli.command {
+            Commands::Wizard(command) => match command {
+                WizardCommand::Spec(args) => {
+                    assert!(matches!(args.mode, crate::cmd::wizard::WizardMode::Setup));
+                }
+                WizardCommand::New(_) => panic!("expected wizard spec args"),
             },
             _ => panic!("expected wizard args"),
         }

@@ -14,6 +14,7 @@ fn wizard_new_creates_template_files() {
         out: Some(temp.path().to_path_buf()),
         required_capabilities: Vec::new(),
         provided_capabilities: Vec::new(),
+        plan_json: false,
     };
 
     run(WizardCommand::New(args)).expect("wizard new should succeed");
@@ -55,6 +56,7 @@ fn wizard_new_writes_answers_files_when_provided() {
         out: Some(temp.path().to_path_buf()),
         required_capabilities: Vec::new(),
         provided_capabilities: Vec::new(),
+        plan_json: false,
     };
 
     run(WizardCommand::New(args)).expect("wizard new should succeed");
@@ -84,6 +86,7 @@ fn wizard_new_embeds_declared_capabilities_in_descriptor() {
             "host.http.client".into(),
         ],
         provided_capabilities: vec!["telemetry.emit".into()],
+        plan_json: false,
     };
 
     run(WizardCommand::New(args)).expect("wizard new should succeed");
@@ -107,6 +110,7 @@ fn wizard_new_qa_apply_answers_enforces_mode_contracts() {
         out: Some(temp.path().to_path_buf()),
         required_capabilities: Vec::new(),
         provided_capabilities: Vec::new(),
+        plan_json: false,
     };
 
     run(WizardCommand::New(args)).expect("wizard new should succeed");
@@ -119,4 +123,56 @@ fn wizard_new_qa_apply_answers_enforces_mode_contracts() {
     assert!(qa_rs.contains(".or_insert(JsonValue::Bool(true));"));
     assert!(qa_rs.contains("Mode::Remove => {"));
     assert!(qa_rs.contains("config.insert(\"enabled\".to_string(), JsonValue::Bool(false));"));
+}
+
+#[test]
+fn wizard_new_maps_namespaced_answers_to_enabled_and_kind() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let answers_path = temp.path().join("answers.json");
+    fs::write(
+        &answers_path,
+        r#"{"component.features.enabled": false, "component.kind": "source"}"#,
+    )
+    .unwrap();
+    let args = WizardNewArgs {
+        name: "namespaced-component".into(),
+        abi_version: "0.6.0".into(),
+        mode: WizardMode::Default,
+        answers: Some(answers_path),
+        out: Some(temp.path().to_path_buf()),
+        required_capabilities: Vec::new(),
+        provided_capabilities: Vec::new(),
+        plan_json: false,
+    };
+
+    run(WizardCommand::New(args)).expect("wizard new should succeed");
+
+    let root = temp.path().join("namespaced-component");
+    let mapped = fs::read_to_string(root.join("examples/default.answers.json")).unwrap();
+    assert!(mapped.contains("\"enabled\": false"));
+
+    let descriptor = fs::read_to_string(root.join("src/descriptor.rs")).unwrap();
+    assert!(descriptor.contains("role: \"source\".to_string()"));
+}
+
+#[test]
+fn wizard_new_plan_json_does_not_write_files() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let args = WizardNewArgs {
+        name: "dry-run-component".into(),
+        abi_version: "0.6.0".into(),
+        mode: WizardMode::Default,
+        answers: None,
+        out: Some(temp.path().to_path_buf()),
+        required_capabilities: Vec::new(),
+        provided_capabilities: Vec::new(),
+        plan_json: true,
+    };
+
+    run(WizardCommand::New(args)).expect("wizard plan-json should succeed");
+    let root = temp.path().join("dry-run-component");
+    assert!(
+        !root.exists(),
+        "plan-json mode should not execute file writes"
+    );
 }

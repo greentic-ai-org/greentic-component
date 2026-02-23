@@ -40,6 +40,8 @@ pub mod test_harness;
     feature = "cli"
 ))]
 pub mod wasm;
+#[cfg(feature = "cli")]
+pub mod wizard;
 
 #[cfg(feature = "abi")]
 pub use abi::{AbiError, check_world, has_lifecycle};
