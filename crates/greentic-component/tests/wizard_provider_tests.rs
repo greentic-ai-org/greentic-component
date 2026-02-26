@@ -80,6 +80,24 @@ fn scaffold_plan_snapshot_is_deterministic() {
                 size: None,
                 blake3: None,
             },
+            WizardStep::BuildComponent { project_root } => StepSnapshot {
+                kind: "build_component",
+                path: project_root.clone(),
+                size: None,
+                blake3: None,
+            },
+            WizardStep::TestComponent { project_root, full } => StepSnapshot {
+                kind: "test_component",
+                path: format!("{project_root}:{full}"),
+                size: None,
+                blake3: None,
+            },
+            WizardStep::Doctor { project_root } => StepSnapshot {
+                kind: "doctor",
+                path: project_root.clone(),
+                size: None,
+                blake3: None,
+            },
         })
         .collect::<Vec<_>>();
 

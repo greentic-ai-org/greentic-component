@@ -4,27 +4,16 @@ This module exposes deterministic scaffold planning for wizard flows.
 
 ## Design
 
-- `spec_scaffold(mode) -> ComponentQaSpec`
-- `apply_scaffold(request, dry_run) -> ApplyResult`
+- `wizard --mode <create|build_test|doctor> --execution <dry-run|execute>`
+- `apply_scaffold(request, dry_run) -> ApplyResult` (create mode core)
 - `execute_plan(plan) -> Result<()>`
 
 `apply_scaffold(..., dry_run=true)` is side-effect free and returns a reproducible plan.
 Execution is explicit and separate via `execute_plan`.
 
-## CLI Compatibility
+## CLI
 
-`greentic-component wizard new ...` remains stable. The CLI adapter now:
-
-1. validates CLI inputs,
-2. calls `apply_scaffold(..., dry_run=true)`,
-3. executes returned steps with `execute_plan`.
-
-This preserves UX while switching internals to plan-driven execution.
-
-Additional machine-friendly surfaces:
-
-- `greentic-component wizard spec --mode <default|setup|update|remove>` prints QA spec JSON.
-- `greentic-component wizard new ... --plan-json` prints deterministic plan JSON without writing files.
+`greentic-component wizard` is the single wizard entrypoint. It validates inputs, builds deterministic plans, and executes steps when requested.
 
 ## Plan Shape
 
@@ -40,6 +29,9 @@ Current step kinds:
 
 - `ensure_dir`
 - `write_file`
+- `build_component`
+- `test_component`
+- `doctor`
 
 ## Orchestrator Usage
 

@@ -476,8 +476,6 @@ fn call_describe(wasm_path: &Path) -> Result<Vec<u8>, String> {
     let mut results = vec![Val::Bool(false); func.ty(&mut store).results().len()];
     func.call(&mut store, &[], &mut results)
         .map_err(|err| format!("describe call failed: {err}"))?;
-    func.post_return(&mut store)
-        .map_err(|err| format!("post-return failed: {err}"))?;
     let val = results
         .first()
         .ok_or_else(|| "describe returned no value".to_string())?;

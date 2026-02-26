@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use greentic_interfaces::runner_host_v1::{self, RunnerHost};
 use greentic_interfaces_host::component::v0_5::{self, ControlHost};
 use greentic_interfaces_wasmtime::host_helpers::v1::secrets_store::{
@@ -70,11 +70,12 @@ impl HostState {
                     dir_perms,
                     file_perms,
                 )
-                .with_context(|| {
-                    format!(
-                        "failed to preopen {} as {}",
+                .map_err(|err| {
+                    anyhow!(
+                        "failed to preopen {} as {}: {}",
                         preopen.host_path.display(),
-                        preopen.guest_path
+                        preopen.guest_path,
+                        err
                     )
                 })?;
         }
@@ -111,11 +112,16 @@ impl HostState {
 
 pub fn build_linker(engine: &Engine) -> Result<Linker<HostState>> {
     let mut linker = Linker::<HostState>::new(engine);
-    runner_host_v1::add_to_linker(&mut linker, |state: &mut HostState| &mut state.runner)?;
-    v0_5::add_control_to_linker(&mut linker, |state: &mut HostState| &mut state.control)?;
-    add_state_store_to_linker(&mut linker, |state: &mut HostState| &mut state.state)?;
-    add_secrets_store_to_linker(&mut linker, |state: &mut HostState| &mut state.secrets)?;
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    runner_host_v1::add_to_linker(&mut linker, |state: &mut HostState| &mut state.runner)
+        .map_err(|err| anyhow!("failed to add runner host linker: {err}"))?;
+    v0_5::add_control_to_linker(&mut linker, |state: &mut HostState| &mut state.control)
+        .map_err(|err| anyhow!("failed to add control linker: {err}"))?;
+    add_state_store_to_linker(&mut linker, |state: &mut HostState| &mut state.state)
+        .map_err(|err| anyhow!("failed to add state-store linker: {err}"))?;
+    add_secrets_store_to_linker(&mut linker, |state: &mut HostState| &mut state.secrets)
+        .map_err(|err| anyhow!("failed to add secrets-store linker: {err}"))?;
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .map_err(|err| anyhow!("failed to add wasi linker: {err}"))?;
     Ok(linker)
 }
 
@@ -368,13 +374,13 @@ impl ResourceLimiter for HostLimits {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> Result<bool> {
+    ) -> wasmtime::Result<bool> {
         if desired > self.max_memory_bytes {
             self.hit.store(true, Ordering::Relaxed);
-            return Err(anyhow!(
+            return Err(wasmtime::Error::msg(format!(
                 "memory limit exceeded (requested {desired} bytes, max {})",
                 self.max_memory_bytes
-            ));
+            )));
         }
         Ok(true)
     }
@@ -384,7 +390,7 @@ impl ResourceLimiter for HostLimits {
         _current: usize,
         _desired: usize,
         _maximum: Option<usize>,
-    ) -> Result<bool> {
+    ) -> wasmtime::Result<bool> {
         Ok(true)
     }
 }

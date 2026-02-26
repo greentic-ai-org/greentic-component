@@ -6,7 +6,7 @@ use crate::cmd::store::StoreCommand;
 use crate::cmd::{
     self, build::BuildArgs, doctor::DoctorArgs, flow::FlowCommand, hash::HashArgs,
     inspect::InspectArgs, new::NewArgs, templates::TemplatesArgs, test::TestArgs,
-    wizard::WizardCommand,
+    wizard::WizardArgs,
 };
 use crate::scaffold::engine::ScaffoldEngine;
 
@@ -27,8 +27,7 @@ enum Commands {
     /// Scaffold a new Greentic component project
     New(NewArgs),
     /// Component wizard helpers
-    #[command(subcommand)]
-    Wizard(WizardCommand),
+    Wizard(WizardArgs),
     /// List available component templates
     Templates(TemplatesArgs),
     /// Run component doctor checks
@@ -102,40 +101,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_wizard_new_subcommand() {
+    fn parses_wizard_command() {
         let cli = Cli::try_parse_from([
             "greentic-component",
             "wizard",
-            "new",
-            "demo-component",
-            "--abi-version",
-            "0.6.0",
+            "--mode",
+            "doctor",
+            "--execution",
+            "dry-run",
         ])
         .expect("expected CLI to parse");
         match cli.command {
-            Commands::Wizard(command) => match command {
-                WizardCommand::New(args) => {
-                    assert_eq!(args.name, "demo-component");
-                    assert_eq!(args.abi_version, "0.6.0");
-                    assert!(!args.plan_json);
-                }
-                WizardCommand::Spec(_) => panic!("expected wizard new args"),
-            },
-            _ => panic!("expected wizard args"),
-        }
-    }
-
-    #[test]
-    fn parses_wizard_spec_subcommand() {
-        let cli = Cli::try_parse_from(["greentic-component", "wizard", "spec", "--mode", "setup"])
-            .expect("expected CLI to parse");
-        match cli.command {
-            Commands::Wizard(command) => match command {
-                WizardCommand::Spec(args) => {
-                    assert!(matches!(args.mode, crate::cmd::wizard::WizardMode::Setup));
-                }
-                WizardCommand::New(_) => panic!("expected wizard spec args"),
-            },
+            Commands::Wizard(args) => {
+                assert!(matches!(args.mode, crate::cmd::wizard::RunMode::Doctor));
+                assert!(matches!(
+                    args.execution,
+                    crate::cmd::wizard::ExecutionMode::DryRun
+                ));
+            }
             _ => panic!("expected wizard args"),
         }
     }

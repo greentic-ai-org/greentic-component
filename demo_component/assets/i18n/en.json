@@ -1,0 +1,12 @@
+{
+  "qa.default.title": "Default configuration",
+  "qa.default.description": "Review default settings for this component.",
+  "qa.default.enabled.label": "Enable the component",
+  "qa.default.enabled.help": "Toggle whether the component should run.",
+  "qa.setup.title": "Initial setup",
+  "qa.setup.description": "Provide initial configuration values.",
+  "qa.setup.enabled.label": "Enable on setup",
+  "qa.setup.enabled.help": "Enable the component after setup completes.",
+  "qa.update.title": "Update configuration",
+  "qa.remove.title": "Removal settings"
+}

@@ -251,6 +251,7 @@ fn new_outputs_template_metadata_in_json() {
 }
 
 #[test]
+#[cfg(feature = "store")]
 fn store_fetch_accepts_source_and_out_dir() {
     let temp = tempfile::TempDir::new().unwrap();
     let source_path = temp.path().join("component.wasm");
@@ -276,6 +277,7 @@ fn store_fetch_accepts_source_and_out_dir() {
 }
 
 #[test]
+#[cfg(feature = "store")]
 fn store_fetch_accepts_wasm_output_path() {
     let temp = tempfile::TempDir::new().unwrap();
     let source_path = temp.path().join("component.wasm");
@@ -301,6 +303,7 @@ fn store_fetch_accepts_wasm_output_path() {
 }
 
 #[test]
+#[cfg(feature = "store")]
 fn store_fetch_accepts_directory_source() {
     let temp = tempfile::TempDir::new().unwrap();
     let source_dir = temp.path().join("source");

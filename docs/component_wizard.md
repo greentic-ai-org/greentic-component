@@ -5,7 +5,7 @@ The component wizard generates a ready-to-edit component@0.6.0 scaffold with Gre
 Legacy naming/compatibility details are in `docs/vision/legacy.md`.
 
 **Quickstart**
-1. `greentic-component wizard new hello-component`
+1. `greentic-component wizard --mode create --execution execute --project-root .`
 2. `cd hello-component`
 3. `make wasm`
 4. `greentic-component doctor ./dist/hello-component__0_6_0.wasm`
@@ -26,8 +26,8 @@ The wizard stores ABI version in `Cargo.toml` under `[package.metadata.greentic]
 - Output: `dist/<name>__<abi_with_underscores>.wasm`
 - Example: `dist/hello-component__0_6_0.wasm`
 
-**QA Modes**
-The template includes four QA modes: default, setup, update, remove. Use `--mode` (default/setup/update/remove) with `--answers` to write `examples/<mode>.answers.json` and `examples/<mode>.answers.cbor`. If `--answers` is not provided, no example answers are created. `upgrade` is intentionally not accepted in 0.6 scaffolds.
+**Wizard Modes**
+The CLI supports `--mode create|build_test|doctor` with `--execution dry-run|execute`. Use `--qa-answers` for deterministic replay and `--qa-answers-out` to persist answers payloads.
 
 **Capabilities in describe()**
 Use repeatable flags to embed explicit capability declarations in generated `src/descriptor.rs`:
@@ -36,7 +36,7 @@ Use repeatable flags to embed explicit capability declarations in generated `src
 - `--provided-capability telemetry.emit`
 
 Example:
-`greentic-component wizard new hello-component --required-capability host.http.client --required-capability host.secrets.required`
+`greentic-component wizard --mode create --execution execute --qa-answers ./answers.json`
 
 **Doctor Validation**
 `greentic-component doctor` validates the built wasm artifact for:

@@ -190,8 +190,6 @@ fn call_component_func(
     let mut results = vec![Val::Bool(false); results_len];
     func.call(&mut *store, params, &mut results)
         .map_err(|err| CompError::Runtime(format!("call failed: {err}")))?;
-    func.post_return(&mut *store)
-        .map_err(|err| CompError::Runtime(format!("post-return failed: {err}")))?;
     Ok(results)
 }
 

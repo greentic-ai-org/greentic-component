@@ -147,9 +147,8 @@ Generated scaffold note: capability contract fields in `describe()` come from st
 Wizard shortcut for scaffolds:
 
 ```bash
-greentic-component wizard new hello-component \
-  --required-capability host.http.client \
-  --required-capability host.secrets.required
+greentic-component wizard --mode create --execution execute \
+  --qa-answers ./answers.json
 ```
 
 ### 5.2 Denial path: capability missing

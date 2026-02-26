@@ -8,7 +8,7 @@ Audit of current scaffold and wizard entrypoints in `greentic-component` to intr
 - CLI entrypoint:
   - `crates/greentic-component/src/cli.rs` routes `greentic-component wizard ...` into `cmd::wizard::run`.
 - Existing wizard scaffold implementation:
-  - `crates/greentic-component/src/cmd/wizard.rs` previously performed validation + direct file writes in one path.
+  - `crates/greentic-component/src/cmd/wizard.rs` now exposes a single `wizard` command surface with deterministic planning/execution.
   - Template emission is generated in-process (no external template directory) via render functions and file builders.
 - Existing non-wizard scaffold command:
   - `crates/greentic-component/src/cmd/new.rs` delegates to `ScaffoldEngine` (separate `new` flow, not wizard).
@@ -21,14 +21,11 @@ Audit of current scaffold and wizard entrypoints in `greentic-component` to intr
 ## Chosen Integration
 
 - Introduce provider module `crates/greentic-component/src/wizard/mod.rs` as canonical implementation.
-- Keep `crates/greentic-component/src/cmd/wizard.rs` as compatibility adapter:
+- Keep `crates/greentic-component/src/cmd/wizard.rs` as command adapter:
   - parse/validate CLI args
-  - call provider `apply_scaffold(..., dry_run=true)` to produce plan
-  - execute via `execute_plan(plan)`
-  - preserve current CLI output/behavior
-  - expose machine-consumable command surfaces:
-    - `wizard spec` (returns QA spec JSON)
-    - `wizard new --plan-json` (returns plan JSON, no writes)
+  - call provider `apply_scaffold(..., dry_run=true)` for create mode planning
+  - execute via deterministic plan steps
+  - preserve single CLI surface: `wizard --mode ... --execution ...`
 - Plan model in provider includes:
   - `plan_version`
   - metadata (`generator`, template version, template digest, requested ABI)

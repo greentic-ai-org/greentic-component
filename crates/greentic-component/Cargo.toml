@@ -47,6 +47,9 @@ cli = [
     "dep:uuid",
     "dep:base64",
     "dep:reqwest",
+    "dep:greentic-qa-lib",
+    "dep:sys-locale",
+    "dep:unic-langid",
 ]
 store = ["dep:greentic-distributor-client"]
 fuzz = ["dep:proptest"]
@@ -91,6 +94,7 @@ wit-parser = { workspace = true, optional = true }
 wasmparser = { workspace = true, optional = true }
 wasm-metadata = { workspace = true }
 greentic-types = { workspace = true }
+greentic-qa-lib = { workspace = true, optional = true }
 greentic-interfaces = { workspace = true, optional = true }
 greentic-interfaces-host = { workspace = true, optional = true }
 greentic-interfaces-wasmtime = { workspace = true, optional = true }
@@ -99,6 +103,8 @@ uuid = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 toml = { workspace = true }
+sys-locale = { workspace = true, optional = true }
+unic-langid = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

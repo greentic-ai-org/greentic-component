@@ -1,23 +1,43 @@
 #![cfg(feature = "cli")]
 
-use greentic_component::cmd::wizard::{WizardCommand, WizardMode, WizardNewArgs, run};
+use greentic_component::cmd::wizard::{ExecutionMode, RunMode, WizardArgs, run};
 use std::fs;
 
+fn create_answers(path: &std::path::Path, name: &str) {
+    let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let payload = serde_json::json!({
+        "schema": "component-wizard-run/v1",
+        "mode": "create",
+        "fields": {
+            "component_name": name,
+            "output_dir": root.join(name),
+            "abi_version": "0.6.0"
+        }
+    });
+    fs::write(path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
+}
+
 #[test]
-fn wizard_new_creates_template_files() {
+fn wizard_create_execute_creates_template_files() {
     let temp = tempfile::TempDir::new().unwrap();
-    let args = WizardNewArgs {
-        name: "demo-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: None,
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: Vec::new(),
-        provided_capabilities: Vec::new(),
-        plan_json: false,
+    let answers_path = temp.path().join("answers.json");
+    create_answers(&answers_path, "demo-component");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::Execute,
+        dry_run: false,
+        qa_answers: Some(answers_path),
+        qa_answers_out: None,
+        plan_out: None,
+        locale: None,
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
     };
 
-    run(WizardCommand::New(args)).expect("wizard new should succeed");
+    run(args).expect("wizard create should succeed");
 
     let root = temp.path().join("demo-component");
     assert!(root.join("Cargo.toml").exists());
@@ -29,150 +49,62 @@ fn wizard_new_creates_template_files() {
     assert!(root.join("src/qa.rs").exists());
     assert!(root.join("src/i18n.rs").exists());
     assert!(root.join("assets/i18n/en.json").exists());
-    assert!(!root.join("examples/default.answers.json").exists());
 
     let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo_toml.contains("name = \"demo-component\""));
     assert!(cargo_toml.contains("[package.metadata.greentic]"));
     assert!(cargo_toml.contains("abi_version = \"0.6.0\""));
-
-    let makefile = fs::read_to_string(root.join("Makefile")).unwrap();
-    assert!(makefile.contains("WASM_OUT := $(DIST_DIR)/$(NAME)__$(ABI_VERSION_UNDERSCORE).wasm"));
-
-    let lib_rs = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-    assert!(lib_rs.contains("greentic_interfaces_guest::export_component_v060!(Component);"));
 }
 
 #[test]
-fn wizard_new_writes_answers_files_when_provided() {
+fn wizard_create_writes_answers_out_when_requested() {
     let temp = tempfile::TempDir::new().unwrap();
     let answers_path = temp.path().join("answers.json");
-    fs::write(&answers_path, r#"{"enabled": true}"#).unwrap();
-    let args = WizardNewArgs {
-        name: "answers-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: Some(answers_path),
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: Vec::new(),
-        provided_capabilities: Vec::new(),
-        plan_json: false,
+    let answers_out = temp.path().join("out/answers.out.json");
+    create_answers(&answers_path, "answers-component");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::DryRun,
+        dry_run: false,
+        qa_answers: Some(answers_path),
+        qa_answers_out: Some(answers_out.clone()),
+        plan_out: Some(temp.path().join("out/plan.json")),
+        locale: None,
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
     };
 
-    run(WizardCommand::New(args)).expect("wizard new should succeed");
-
-    let root = temp.path().join("answers-component");
-    let json_path = root.join("examples/default.answers.json");
-    let cbor_path = root.join("examples/default.answers.cbor");
-    assert!(json_path.exists());
-    assert!(cbor_path.exists());
-    let json = fs::read_to_string(json_path).unwrap();
-    assert!(json.contains("\"enabled\""));
-    assert!(!root.join("examples/setup.answers.json").exists());
+    run(args).expect("wizard dry-run should succeed");
+    assert!(answers_out.exists());
 }
 
 #[test]
-fn wizard_new_embeds_declared_capabilities_in_descriptor() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let args = WizardNewArgs {
-        name: "cap-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: None,
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: vec![
-            "host.http.client".into(),
-            "host.secrets.required".into(),
-            "host.http.client".into(),
-        ],
-        provided_capabilities: vec!["telemetry.emit".into()],
-        plan_json: false,
-    };
-
-    run(WizardCommand::New(args)).expect("wizard new should succeed");
-
-    let root = temp.path().join("cap-component");
-    let descriptor = fs::read_to_string(root.join("src/descriptor.rs")).unwrap();
-    assert!(descriptor.contains(
-        "const REQUIRED_CAPABILITIES: &[&str] = &[\"host.http.client\", \"host.secrets.required\"];"
-    ));
-    assert!(descriptor.contains("const PROVIDED_CAPABILITIES: &[&str] = &[\"telemetry.emit\"];"));
-}
-
-#[test]
-fn wizard_new_qa_apply_answers_enforces_mode_contracts() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let args = WizardNewArgs {
-        name: "qa-contract-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: None,
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: Vec::new(),
-        provided_capabilities: Vec::new(),
-        plan_json: false,
-    };
-
-    run(WizardCommand::New(args)).expect("wizard new should succeed");
-
-    let root = temp.path().join("qa-contract-component");
-    let qa_rs = fs::read_to_string(root.join("src/qa.rs")).unwrap();
-
-    assert!(qa_rs.contains("Mode::Default | Mode::Setup | Mode::Update"));
-    assert!(qa_rs.contains(".entry(\"enabled\".to_string())"));
-    assert!(qa_rs.contains(".or_insert(JsonValue::Bool(true));"));
-    assert!(qa_rs.contains("Mode::Remove => {"));
-    assert!(qa_rs.contains("config.insert(\"enabled\".to_string(), JsonValue::Bool(false));"));
-}
-
-#[test]
-fn wizard_new_maps_namespaced_answers_to_enabled_and_kind() {
+fn wizard_create_dry_run_does_not_write_files() {
     let temp = tempfile::TempDir::new().unwrap();
     let answers_path = temp.path().join("answers.json");
-    fs::write(
-        &answers_path,
-        r#"{"component.features.enabled": false, "component.kind": "source"}"#,
-    )
-    .unwrap();
-    let args = WizardNewArgs {
-        name: "namespaced-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: Some(answers_path),
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: Vec::new(),
-        provided_capabilities: Vec::new(),
-        plan_json: false,
+    create_answers(&answers_path, "component");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::DryRun,
+        dry_run: false,
+        qa_answers: Some(answers_path),
+        qa_answers_out: None,
+        plan_out: Some(temp.path().join("plan.json")),
+        locale: None,
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
     };
 
-    run(WizardCommand::New(args)).expect("wizard new should succeed");
-
-    let root = temp.path().join("namespaced-component");
-    let mapped = fs::read_to_string(root.join("examples/default.answers.json")).unwrap();
-    assert!(mapped.contains("\"enabled\": false"));
-
-    let descriptor = fs::read_to_string(root.join("src/descriptor.rs")).unwrap();
-    assert!(descriptor.contains("role: \"source\".to_string()"));
-}
-
-#[test]
-fn wizard_new_plan_json_does_not_write_files() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let args = WizardNewArgs {
-        name: "dry-run-component".into(),
-        abi_version: "0.6.0".into(),
-        mode: WizardMode::Default,
-        answers: None,
-        out: Some(temp.path().to_path_buf()),
-        required_capabilities: Vec::new(),
-        provided_capabilities: Vec::new(),
-        plan_json: true,
-    };
-
-    run(WizardCommand::New(args)).expect("wizard plan-json should succeed");
-    let root = temp.path().join("dry-run-component");
+    run(args).expect("wizard dry-run should succeed");
+    let root = temp.path().join("component");
     assert!(
         !root.exists(),
-        "plan-json mode should not execute file writes"
+        "dry-run mode should not execute file writes"
     );
 }

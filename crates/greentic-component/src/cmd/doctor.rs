@@ -642,15 +642,21 @@ impl ComponentCaller {
     fn new(wasm_path: &Path) -> Result<Self, anyhow::Error> {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine =
+            Engine::new(&config).map_err(|err| anyhow::anyhow!("create engine failed: {err}"))?;
 
-        let component = Component::from_file(&engine, wasm_path)?;
+        let component = Component::from_file(&engine, wasm_path).map_err(|err| {
+            anyhow::anyhow!("load component {} failed: {err}", wasm_path.display())
+        })?;
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|err| anyhow::anyhow!("add wasi linker failed: {err}"))?;
 
         let wasi = DoctorWasi::new()?;
         let mut store = Store::new(&engine, wasi);
-        let instance = linker.instantiate(&mut store, &component)?;
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .map_err(|err| anyhow::anyhow!("instantiate component failed: {err}"))?;
         Ok(Self { store, instance })
     }
 
@@ -700,8 +706,6 @@ fn call_component_func(
     let mut results = vec![Val::Bool(false); results_len];
     func.call(&mut *store, params, &mut results)
         .map_err(|err| format!("call failed: {err}"))?;
-    func.post_return(&mut *store)
-        .map_err(|err| format!("post-return failed: {err}"))?;
     Ok(results)
 }
 

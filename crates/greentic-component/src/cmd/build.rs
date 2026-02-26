@@ -477,15 +477,16 @@ fn sanitize_name(raw: &str) -> String {
 fn call_describe(wasm_path: &Path) -> Result<Vec<u8>> {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
-    let engine = Engine::new(&config).context("failed to create engine")?;
+    let engine = Engine::new(&config).map_err(|err| anyhow!("failed to create engine: {err}"))?;
     let component = Component::from_file(&engine, wasm_path)
-        .with_context(|| format!("failed to load component {}", wasm_path.display()))?;
+        .map_err(|err| anyhow!("failed to load component {}: {err}", wasm_path.display()))?;
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).context("failed to add wasi")?;
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .map_err(|err| anyhow!("failed to add wasi: {err}"))?;
     let mut store = Store::new(&engine, BuildWasi::new()?);
     let instance = linker
         .instantiate(&mut store, &component)
-        .context("failed to instantiate component")?;
+        .map_err(|err| anyhow!("failed to instantiate component: {err}"))?;
     let instance_index = resolve_interface_index(&instance, &mut store, "component-descriptor")
         .ok_or_else(|| anyhow!("missing export interface component-descriptor"))?;
     let func_index = instance
@@ -496,8 +497,7 @@ fn call_describe(wasm_path: &Path) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow!("describe export is not callable"))?;
     let mut results = vec![Val::Bool(false); func.ty(&mut store).results().len()];
     func.call(&mut store, &[], &mut results)
-        .context("describe call failed")?;
-    func.post_return(&mut store).context("post-return failed")?;
+        .map_err(|err| anyhow!("describe call failed: {err}"))?;
     let val = results
         .first()
         .ok_or_else(|| anyhow!("describe returned no value"))?;

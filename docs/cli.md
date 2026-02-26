@@ -24,9 +24,9 @@ Global:
 - Tips: use `--json` to drive tooling/selection in scripts; template paths are shown for local overrides.
 
 ## wizard
-- Purpose: generate a component@0.6.0 template scaffold (separate from `new`).
-- Usage: `greentic-component wizard new <name> [--abi-version 0.6.0] [--mode default|setup|update|remove] [--answers answers.json] [--out dir] [--required-capability <cap>]... [--provided-capability <cap>]...`.
-- Tips: `--answers` writes `examples/<mode>.answers.json` + `.cbor` for the selected mode (no files are created without `--answers`); `--abi-version` is stored in Cargo metadata and used for wasm naming; `--required-capability` / `--provided-capability` populate `describe()` capability fields in generated code; run `greentic-component doctor` on the built wasm to validate the structure. In 0.6 scaffolds, `upgrade` is not accepted as a mode alias.
+- Purpose: run wizard workflows on the deterministic plan core (`create`, `build_test`, `doctor`).
+- Usage: `greentic-component wizard --mode create|build_test|doctor --execution dry-run|execute [--qa-answers answers.json] [--qa-answers-out answers.json] [--project-root path] [--template id] [--full-tests]`.
+- Tips: use `--execution dry-run` to emit plan JSON without changing files; use `--qa-answers` for non-interactive replay and `--qa-answers-out` to persist reproducible input.
 
 ## inspect
 - Purpose: inspect a component manifest or a self-describing 0.6.0 wasm/describe artifact.

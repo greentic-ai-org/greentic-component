@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.4.62"
+version = "0.4.63"
 license = "MIT"
 rust-version = "1.91"
 
@@ -73,6 +73,7 @@ greentic-interfaces = { version = "0.4", default-features = false, features = [
 greentic-interfaces-wasmtime = "0.4"
 greentic-distributor-client = { version = "0.4", default-features = false, features = ["dist-client"] }
 greentic-types = "0.4"
+greentic-qa-lib = { path = "../greentic-qa/crates/qa-lib" }
 handlebars = "6"
 hex = "0.4"
 ignore = "0.4"
@@ -94,6 +95,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
 sha2 = "0.10"
+sys-locale = "0.3"
 tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
@@ -102,15 +104,15 @@ tokio-util = "0.7"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+unic-langid = "0.9"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 wasm-encoder = "0"
 wasm-metadata = "0"
 wasmparser = "0"
-wasmtime = { version = "41", default-features = false, features = ["component-model", "cranelift", "runtime"] }
-wasmtime-wasi = { version = "41" }
+wasmtime = { version = "42", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "42" }
 wit-component = "0.245"
 wit-parser = "0.245"
-
 

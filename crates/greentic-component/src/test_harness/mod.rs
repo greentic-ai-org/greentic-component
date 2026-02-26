@@ -147,49 +147,30 @@ impl TestHarness {
         wasmtime_config.wasm_component_model(true);
         wasmtime_config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
         wasmtime_config.epoch_interruption(true);
-        let engine = Engine::new(&wasmtime_config).context("create wasmtime engine")?;
+        let engine = Engine::new(&wasmtime_config)
+            .map_err(|err| anyhow::anyhow!("create wasmtime engine: {err}"))?;
 
-        let component =
-            Component::from_binary(&engine, &config.wasm_bytes).context("load component wasm")?;
+        let component = Component::from_binary(&engine, &config.wasm_bytes)
+            .map_err(|err| anyhow::anyhow!("load component wasm: {err}"))?;
         let wasm_bytes_metadata = describe_wasm_metadata(&config.wasm_bytes);
         let abi = detect_component_abi(&config.wasm_bytes);
 
         let linker = build_linker(&engine)?;
-        let instance_pre = linker
-            .instantiate_pre(&component)
-            .map_err(|err| {
-                eprintln!(
-                    "Linker::instantiate_pre failed ({}): {err}",
-                    wasm_bytes_metadata
-                );
-                for source in err.chain().skip(1) {
-                    eprintln!("  cause: {source}");
-                }
+        let instance_pre = linker.instantiate_pre(&component).map_err(|err| {
+            anyhow::anyhow!(
+                "prepare component instance (wasm metadata: {}): {}",
+                wasm_bytes_metadata,
                 err
-            })
-            .with_context(|| {
-                format!(
-                    "prepare component instance (wasm metadata: {})",
-                    wasm_bytes_metadata
-                )
-            })?;
-        let guest_indices = if abi == ComponentAbi::V0_5 {
-            Some(
-                GuestIndices::new(&instance_pre)
-                    .map_err(|err| {
-                        eprintln!("GuestIndices::new failed ({}): {err}", wasm_bytes_metadata);
-                        for source in err.chain().skip(1) {
-                            eprintln!("  cause: {source}");
-                        }
-                        err
-                    })
-                    .with_context(|| {
-                        format!(
-                            "load guest indices (wasm metadata: {})",
-                            wasm_bytes_metadata
-                        )
-                    })?,
             )
+        })?;
+        let guest_indices = if abi == ComponentAbi::V0_5 {
+            Some(GuestIndices::new(&instance_pre).map_err(|err| {
+                anyhow::anyhow!(
+                    "load guest indices (wasm metadata: {}): {}",
+                    wasm_bytes_metadata,
+                    err
+                )
+            })?)
         } else {
             None
         };
@@ -277,11 +258,11 @@ impl TestHarness {
                 let instance = self
                     .instance_pre
                     .instantiate(&mut store)
-                    .context("instantiate component")
+                    .map_err(|err| anyhow::anyhow!("instantiate component: {err}"))
                     .and_then(|instance| {
                         guest_indices
                             .load(&mut store, &instance)
-                            .context("load component exports")
+                            .map_err(|err| anyhow::anyhow!("load component exports: {err}"))
                             .map(|exports| (instance, exports))
                     })
                     .with_context(|| {
@@ -308,7 +289,7 @@ impl TestHarness {
                 let run_start = Instant::now();
                 let result = exports
                     .call_invoke(&mut store, &self.exec_ctx, operation, &input)
-                    .context("invoke component");
+                    .map_err(|err| anyhow::anyhow!("invoke component: {err}"));
 
                 use greentic_interfaces_host::component::v0_5::exports::greentic::component::node::InvokeResult;
 
@@ -346,7 +327,7 @@ impl TestHarness {
                     &self.component,
                     &self.linker,
                 )
-                .context("instantiate component")
+                .map_err(|err| anyhow::anyhow!("instantiate component: {err}"))
                 .with_context(|| {
                     format!(
                         "failed to prepare component instance (wasm metadata: {})",
@@ -404,7 +385,7 @@ impl TestHarness {
                 let result = exports
                     .greentic_component_node()
                     .call_invoke(&mut store, operation, &invoke_envelope)
-                    .context("invoke component");
+                    .map_err(|err| anyhow::anyhow!("invoke component: {err}"));
                 let result = match result {
                     Ok(value) => value,
                     Err(err) => {
@@ -436,7 +417,8 @@ impl TestHarness {
                         backoff_ms: err.backoff_ms,
                         details: err
                             .details
-                            .and_then(|bytes| canonical::from_cbor::<Value>(&bytes).ok())
+                            .as_ref()
+                            .and_then(|bytes| canonical::from_cbor::<Value>(bytes).ok())
                             .and_then(|value| serde_json::to_string(&value).ok()),
                     })),
                 }
