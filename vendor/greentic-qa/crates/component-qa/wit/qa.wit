@@ -1,0 +1,25 @@
+package qa;
+
+world qa {
+    /// JSON-based QA component interface.
+    interface qa {
+        /// Returns the form specification JSON for the requested form_id.
+        describe(form_id: string, config_json: string) -> string;
+
+        /// Returns the requested answer schema JSON, factoring in the current context.
+        get_answer_schema(form_id: string, config_json: string, ctx_json: string) -> string;
+
+        /// Returns example answers JSON for the form/visibility.
+        get_example_answers(form_id: string, config_json: string, ctx_json: string) -> string;
+
+        /// Validates the provided answers JSON and returns a ValidationResult JSON.
+        validate_answers(form_id: string, config_json: string, answers_json: string) -> string;
+        next(form_id: string, ctx_json: string, answers_json: string) -> string;
+        apply_store(form_id: string, ctx_json: string, answers_json: string) -> string;
+        submit_patch(form_id: string, config_json: string, ctx_json: string, answers_json: string, question_id: string, value_json: string) -> string;
+        submit_all(form_id: string, config_json: string, ctx_json: string, answers_json: string) -> string;
+        render_text(form_id: string, config_json: string, ctx_json: string, answers_json: string) -> string;
+        render_json_ui(form_id: string, config_json: string, ctx_json: string, answers_json: string) -> string;
+        render_card(form_id: string, config_json: string, ctx_json: string, answers_json: string) -> string;
+    }
+}

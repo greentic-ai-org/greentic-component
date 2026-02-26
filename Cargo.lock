@@ -548,6 +548,8 @@ dependencies = [
 [[package]]
 name = "component-qa"
 version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48b8862c31b3be023a33ee860be940d9eb07206ef33db05cc0f98575a38ff02f"
 dependencies = [
  "qa-spec",
  "serde",
@@ -1584,6 +1586,8 @@ dependencies = [
 [[package]]
 name = "greentic-qa-lib"
 version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25a87e014208a9a3008079382947aef806e4baa238c55e8b9bc1e783966ce6a1"
 dependencies = [
  "component-qa",
  "qa-spec",
@@ -2740,6 +2744,8 @@ dependencies = [
 [[package]]
 name = "qa-spec"
 version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa7772b29846d36ddc4861a73793ae901256bf3c3b90632ce46297509a1d86fa"
 dependencies = [
  "globset",
  "handlebars",

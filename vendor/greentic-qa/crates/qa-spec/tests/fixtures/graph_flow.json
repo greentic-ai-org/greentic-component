@@ -1,0 +1,35 @@
+{
+  "id": "example-flow",
+  "title": "Wizard Flow",
+  "version": "1.0.0",
+  "entry": "start",
+  "steps": {
+    "start": {
+      "type": "message",
+      "mode": "text",
+      "template": "Welcome to the QA wizard!",
+      "next": "ask_name"
+    },
+    "ask_name": {
+      "type": "question",
+      "question_id": "q1",
+      "next": "decision"
+    },
+    "decision": {
+      "type": "decision",
+      "cases": [
+        {
+          "if": {
+            "op": "var",
+            "path": "/answers/q1"
+          },
+          "goto": "end"
+        }
+      ],
+      "default_goto": "ask_name"
+    },
+    "end": {
+      "type": "end"
+    }
+  }
+}

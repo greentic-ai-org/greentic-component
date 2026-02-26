@@ -1,0 +1,28 @@
+{
+  "id": "example-form",
+  "title": "Example Form",
+  "version": "1.0.0",
+  "description": "A simple form to exercise serialization.",
+  "progress_policy": {
+    "skip_answered": true,
+    "autofill_defaults": false,
+    "treat_default_as_answered": false
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "type": "string",
+      "title": "Provider name",
+      "required": true
+    },
+    {
+      "id": "q2",
+      "type": "boolean",
+      "title": "Enable feature",
+      "visible_if": {
+        "op": "var",
+        "path": "/q1"
+      }
+    }
+  ]
+}
