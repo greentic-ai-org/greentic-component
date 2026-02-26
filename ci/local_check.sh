@@ -493,6 +493,14 @@ run_wizard_smoke() {
     rm -rf "$wizard_root"
     run_bin_cmd "wizard new" "$BIN_GREENTIC_COMPONENT" \
         wizard new wizard-smoke --out "$wizard_parent"
+    if [ ! -d "$wizard_root" ]; then
+        record_failure "wizard new (missing scaffold dir: $wizard_root)"
+        if [ $cleanup_wizard -eq 1 ]; then
+            rm -rf "$wizard_parent"
+            trap - EXIT
+        fi
+        return
+    fi
     run_bin_cmd_expect_fail "wizard doctor (unbuilt)" "$BIN_COMPONENT_DOCTOR" "$wizard_root"
 
     # Wizard wasm builds must produce a component-model artifact. Installing
@@ -564,6 +572,14 @@ run_wizard_smoke() {
             fi
         fi
     else
+        if [ ! -f "$wizard_root/Cargo.toml" ]; then
+            record_failure "wizard wasm (missing Cargo.toml: $wizard_root/Cargo.toml)"
+            if [ $cleanup_wizard -eq 1 ]; then
+                rm -rf "$wizard_parent"
+                trap - EXIT
+            fi
+            return
+        fi
         run_cmd "wizard wasm (make)" make -C "$wizard_root" wasm
         local wizard_name
         wizard_name=$(awk 'BEGIN{in_pkg=0} /^\[package\]/{in_pkg=1; next} /^\[/{in_pkg=0} in_pkg && /^name = / {gsub(/"/ , "", $3); print $3; exit}' "$wizard_root/Cargo.toml")
