@@ -1,0 +1,19 @@
+[package]
+name = "component-qa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Greentic AI <dev@greentic.ai>"]
+description = "WASM component hosting QA flows."
+license = "MIT"
+repository = "https://github.com/greentic-ai/greentic-qa"
+homepage = "https://github.com/greentic-ai/greentic-qa"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+qa-spec = { workspace = true }
+thiserror = { workspace = true }

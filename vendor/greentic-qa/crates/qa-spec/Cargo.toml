@@ -1,0 +1,20 @@
+[package]
+name = "qa-spec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Greentic AI <dev@greentic.ai>"]
+description = "Core QA specification models and validation utilities."
+license = "MIT"
+repository = "https://github.com/greentic-ai/greentic-qa"
+homepage = "https://github.com/greentic-ai/greentic-qa"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+handlebars = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+globset = { workspace = true }
+serde_cbor = { workspace = true }

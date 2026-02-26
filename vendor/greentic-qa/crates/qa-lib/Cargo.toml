@@ -1,0 +1,17 @@
+[package]
+name = "greentic-qa-lib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Greentic AI <dev@greentic.ai>"]
+description = "Reusable orchestration facade for Greentic QA wizard flows."
+license = "MIT"
+repository = "https://github.com/greentic-ai/greentic-qa"
+homepage = "https://github.com/greentic-ai/greentic-qa"
+
+[dependencies]
+qa-spec = { workspace = true }
+component-qa = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
