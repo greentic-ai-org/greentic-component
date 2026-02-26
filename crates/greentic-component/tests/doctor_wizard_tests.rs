@@ -16,7 +16,11 @@ fn doctor_rejects_unbuilt_wizard_scaffold() {
             "abi_version": "0.6.0"
         }
     });
-    std::fs::write(&answers_path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
+    std::fs::write(
+        &answers_path,
+        serde_json::to_string_pretty(&payload).unwrap(),
+    )
+    .unwrap();
 
     let args = WizardArgs {
         mode: RunMode::Create,

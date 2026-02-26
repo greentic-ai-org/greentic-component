@@ -30,9 +30,9 @@ static EN_MESSAGES: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
 const SUPPORTED_LOCALES: &[&str] = &[
     "ar", "ar-AE", "ar-DZ", "ar-EG", "ar-IQ", "ar-MA", "ar-SA", "ar-SD", "ar-SY", "ar-TN", "ay",
     "bg", "bn", "cs", "da", "de", "el", "en", "en-GB", "es", "et", "fa", "fi", "fr", "gn", "gu",
-    "hi", "hr", "ht", "hu", "id", "it", "ja", "km", "kn", "ko", "lo", "lt", "lv", "ml", "mr",
-    "ms", "my", "nah", "ne", "nl", "no", "pa", "pl", "pt", "qu", "ro", "ru", "si", "sk", "sr",
-    "sv", "ta", "te", "th", "tl", "tr", "uk", "ur", "vi", "zh",
+    "hi", "hr", "ht", "hu", "id", "it", "ja", "km", "kn", "ko", "lo", "lt", "lv", "ml", "mr", "ms",
+    "my", "nah", "ne", "nl", "no", "pa", "pl", "pt", "qu", "ro", "ru", "si", "sk", "sr", "sv",
+    "ta", "te", "th", "tl", "tr", "uk", "ur", "vi", "zh",
 ];
 
 #[derive(Args, Debug, Clone)]
