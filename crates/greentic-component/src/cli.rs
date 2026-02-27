@@ -122,4 +122,28 @@ mod tests {
             _ => panic!("expected wizard args"),
         }
     }
+
+    #[test]
+    fn parses_wizard_legacy_new_command() {
+        let cli = Cli::try_parse_from([
+            "greentic-component",
+            "wizard",
+            "new",
+            "wizard-smoke",
+            "--out",
+            "/tmp",
+        ])
+        .expect("expected CLI to parse");
+        match cli.command {
+            Commands::Wizard(args) => {
+                assert_eq!(args.legacy_command.as_deref(), Some("new"));
+                assert_eq!(args.legacy_name.as_deref(), Some("wizard-smoke"));
+                assert_eq!(
+                    args.legacy_out.as_deref(),
+                    Some(std::path::Path::new("/tmp"))
+                );
+            }
+            _ => panic!("expected wizard args"),
+        }
+    }
 }

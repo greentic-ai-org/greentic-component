@@ -23,7 +23,7 @@ use crate::scaffold::validate::{ComponentName, normalize_version};
 use crate::wizard::{self, AnswersPayload, WizardPlanEnvelope, WizardPlanMetadata, WizardStep};
 
 static EN_MESSAGES: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
-    let raw = include_str!("../../../../i18n/en.json");
+    let raw = include_str!("../../i18n/en.json");
     serde_json::from_str(raw).unwrap_or_default()
 });
 
@@ -37,6 +37,12 @@ const SUPPORTED_LOCALES: &[&str] = &[
 
 #[derive(Args, Debug, Clone)]
 pub struct WizardArgs {
+    #[arg(value_name = "LEGACY_COMMAND", hide = true)]
+    pub legacy_command: Option<String>,
+    #[arg(value_name = "LEGACY_NAME", hide = true)]
+    pub legacy_name: Option<String>,
+    #[arg(long = "out", value_name = "PATH", hide = true)]
+    pub legacy_out: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "create")]
     pub mode: RunMode,
     #[arg(long, value_enum, default_value = "execute")]
@@ -100,22 +106,21 @@ struct WizardRunOutput {
 }
 
 pub fn run(args: WizardArgs) -> Result<()> {
+    let mut args = args;
     let execution = if args.dry_run {
         ExecutionMode::DryRun
     } else {
         args.execution
     };
 
-    let answers = match &args.qa_answers {
+    let mut answers = match &args.qa_answers {
         Some(path) => Some(load_run_answers(path)?),
-        None => {
-            if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                Some(collect_interactive_answers(&args)?)
-            } else {
-                None
-            }
-        }
+        None => None,
     };
+    apply_legacy_wizard_new_compat(&mut args, &mut answers)?;
+    if answers.is_none() && io::stdin().is_terminal() && io::stdout().is_terminal() {
+        answers = Some(collect_interactive_answers(&args)?);
+    }
 
     if let Some(doc) = &answers
         && doc.mode != args.mode
@@ -180,6 +185,48 @@ pub fn run(args: WizardArgs) -> Result<()> {
         let json = serde_json::to_string_pretty(&output)?;
         println!("{json}");
     }
+    Ok(())
+}
+
+fn apply_legacy_wizard_new_compat(
+    args: &mut WizardArgs,
+    answers: &mut Option<WizardRunAnswers>,
+) -> Result<()> {
+    let has_legacy =
+        args.legacy_command.is_some() || args.legacy_name.is_some() || args.legacy_out.is_some();
+    if !has_legacy {
+        return Ok(());
+    }
+
+    match args.legacy_command.as_deref() {
+        Some("new") => {}
+        Some(other) => bail!("unexpected argument '{other}' found"),
+        None => bail!("wizard: missing legacy command before name (expected `new`)"),
+    }
+
+    let component_name = args
+        .legacy_name
+        .clone()
+        .unwrap_or_else(|| "component".to_string());
+    ComponentName::parse(&component_name)?;
+    let output_parent = args
+        .legacy_out
+        .clone()
+        .unwrap_or_else(|| args.project_root.clone());
+    let output_dir = output_parent.join(&component_name);
+
+    args.mode = RunMode::Create;
+    let mut doc = answers.take().unwrap_or_else(|| default_answers_for(args));
+    doc.mode = RunMode::Create;
+    doc.fields.insert(
+        "component_name".to_string(),
+        JsonValue::String(component_name),
+    );
+    doc.fields.insert(
+        "output_dir".to_string(),
+        JsonValue::String(output_dir.display().to_string()),
+    );
+    *answers = Some(doc);
     Ok(())
 }
 
@@ -783,7 +830,6 @@ fn build_resolved_i18n(locale: &str) -> ResolvedI18nMap {
 
 fn load_locale_messages(locale: &str) -> Option<BTreeMap<String, String>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
         .join("i18n")
         .join(format!("{locale}.json"));
     let raw = fs::read_to_string(path).ok()?;

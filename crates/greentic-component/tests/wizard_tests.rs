@@ -24,6 +24,9 @@ fn wizard_create_execute_creates_template_files() {
     create_answers(&answers_path, "demo-component");
 
     let args = WizardArgs {
+        legacy_command: None,
+        legacy_name: None,
+        legacy_out: None,
         mode: RunMode::Create,
         execution: ExecutionMode::Execute,
         dry_run: false,
@@ -64,6 +67,9 @@ fn wizard_create_writes_answers_out_when_requested() {
     create_answers(&answers_path, "answers-component");
 
     let args = WizardArgs {
+        legacy_command: None,
+        legacy_name: None,
+        legacy_out: None,
         mode: RunMode::Create,
         execution: ExecutionMode::DryRun,
         dry_run: false,
@@ -88,6 +94,9 @@ fn wizard_create_dry_run_does_not_write_files() {
     create_answers(&answers_path, "component");
 
     let args = WizardArgs {
+        legacy_command: None,
+        legacy_name: None,
+        legacy_out: None,
         mode: RunMode::Create,
         execution: ExecutionMode::DryRun,
         dry_run: false,

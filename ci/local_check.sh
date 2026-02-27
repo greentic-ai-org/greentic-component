@@ -114,10 +114,18 @@ run_bin_cmd_expect_fail() {
         record_failure "$desc ($bin_path missing)"
         return 1
     fi
-    if "$bin_path" "$@"; then
+    local out_file
+    out_file=$(mktemp)
+    if "$bin_path" "$@" >"$out_file" 2>&1; then
         echo "[fail] $desc (unexpected success)"
         record_failure "$desc (unexpected success)"
+        if [ -s "$out_file" ]; then
+            cat "$out_file"
+        fi
+        rm -f "$out_file"
+        return
     fi
+    rm -f "$out_file"
 }
 
 run_or_skip() {

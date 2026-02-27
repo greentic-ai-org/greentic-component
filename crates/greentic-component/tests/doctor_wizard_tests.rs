@@ -23,6 +23,9 @@ fn doctor_rejects_unbuilt_wizard_scaffold() {
     .unwrap();
 
     let args = WizardArgs {
+        legacy_command: None,
+        legacy_name: None,
+        legacy_out: None,
         mode: RunMode::Create,
         execution: ExecutionMode::Execute,
         dry_run: false,
