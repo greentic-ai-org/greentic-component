@@ -4,7 +4,7 @@ assertion_line: 81
 expression: normalize_text(manifest.trim())
 ---
 {
-  "$schema": "https://greentic-ai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
+  "$schema": "https://greenticai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
   "id": "ai.greentic.demo-component",
   "name": "demo-component",
   "version": "0.1.0",
@@ -101,3 +101,4 @@ expression: normalize_text(manifest.trim())
     }
   }
 }
+
