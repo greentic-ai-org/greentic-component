@@ -19,7 +19,7 @@ use greentic_types::schemas::component::v0_6_0::{
     ComponentDescribe, ComponentInfo, ComponentQaSpec, QaMode, schema_hash,
 };
 
-const COMPONENT_WORLD_V0_6_0: &str = "greentic:component/component-v0-v6-v0@0.6.0";
+const COMPONENT_WORLD_V0_6_0: &str = "greentic:component/component@0.6.0";
 const SELF_DESCRIBE_TAG: [u8; 3] = [0xd9, 0xd9, 0xf7];
 const EMPTY_CBOR_MAP: [u8; 1] = [0xa0];
 

@@ -44,6 +44,10 @@ fn scaffold_rust_wasi_template() {
     let manifest =
         fs::read_to_string(component_dir.join("component.manifest.json")).expect("manifest");
     let lib_rs = fs::read_to_string(component_dir.join("src/lib.rs")).expect("lib.rs");
+    let qa_rs = fs::read_to_string(component_dir.join("src/qa.rs")).expect("qa.rs");
+    let locales_json =
+        fs::read_to_string(component_dir.join("assets/i18n/locales.json")).expect("locales.json");
+    let i18n_tool = component_dir.join("tools/i18n.sh");
     let input_schema = fs::read_to_string(
         component_dir
             .join("schemas")
@@ -77,6 +81,41 @@ fn scaffold_rust_wasi_template() {
         "operations should deserialize"
     );
     assert_eq!(manifest_parsed.operations[0].name, "handle_message");
+    assert!(
+        operations.iter().any(|op| op["name"] == "qa-spec")
+            && operations.iter().any(|op| op["name"] == "apply-answers")
+            && operations.iter().any(|op| op["name"] == "i18n-keys"),
+        "scaffold should include QA operation names"
+    );
+    assert!(component_dir.join("assets/i18n/en.json").exists());
+    assert!(component_dir.join("assets/i18n/locales.json").exists());
+    assert!(component_dir.join("tools/i18n.sh").exists());
+    assert!(
+        qa_rs.contains("\"qa.field.api_key.label\"")
+            && !qa_rs.contains("Provide values for initial provider setup."),
+        "QA code path should use i18n keys, not raw user-facing strings"
+    );
+    let locales: JsonValue = serde_json::from_str(&locales_json).expect("locales json");
+    assert_eq!(
+        locales,
+        serde_json::json!([
+            "ar", "ar-AE", "ar-DZ", "ar-EG", "ar-IQ", "ar-MA", "ar-SA", "ar-SD", "ar-SY", "ar-TN",
+            "ay", "bg", "bn", "cs", "da", "de", "el", "en-GB", "es", "et", "fa", "fi", "fr",
+            "fr-FR", "gn", "gu", "hi", "hr", "ht", "hu", "id", "it", "ja", "km", "kn", "ko", "lo",
+            "lt", "lv", "ml", "mr", "ms", "my", "nah", "ne", "nl", "nl-NL", "no", "pa", "pl", "pt",
+            "qu", "ro", "ru", "si", "sk", "sr", "sv", "ta", "te", "th", "tl", "tr", "uk", "ur",
+            "vi", "zh"
+        ])
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&i18n_tool)
+            .expect("i18n tool metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "tools/i18n.sh should be executable");
+    }
 
     assert_snapshot!("scaffold_cargo_toml", normalize_text(cargo.trim()));
     assert_snapshot!("scaffold_manifest", normalize_text(manifest.trim()));

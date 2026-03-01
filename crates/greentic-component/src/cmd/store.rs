@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 use serde_json::Value;
 
+use crate::cmd::i18n;
 use crate::path_safety::normalize_under_root;
 use greentic_distributor_client::{DistClient, DistOptions};
 
@@ -40,16 +41,22 @@ fn fetch(args: StoreFetchArgs) -> Result<()> {
         opts.cache_dir = cache_dir.clone();
     }
     let client = DistClient::new(opts);
-    let rt = tokio::runtime::Runtime::new().context("failed to create async runtime")?;
+    let rt =
+        tokio::runtime::Runtime::new().context(i18n::tr_lit("failed to create async runtime"))?;
     let resolved = rt
         .block_on(async { client.ensure_cached(&source).await })
-        .context("store fetch failed")?;
+        .context(i18n::tr_lit("store fetch failed"))?;
     let cache_path = resolved
         .cache_path
-        .ok_or_else(|| anyhow!("resolved source has no cached component path"))?;
+        .ok_or_else(|| anyhow!(i18n::tr_lit("resolved source has no cached component path")))?;
     let (out_dir, wasm_override) = resolve_output_paths(&args.out)?;
-    fs::create_dir_all(&out_dir)
-        .with_context(|| format!("failed to create output dir {}", out_dir.display()))?;
+    fs::create_dir_all(&out_dir).with_context(|| {
+        i18n::tr_lit("failed to create output dir {}").replacen(
+            "{}",
+            &out_dir.display().to_string(),
+            1,
+        )
+    })?;
     let manifest_cache_path = cache_path
         .parent()
         .map(|dir| dir.join("component.manifest.json"));
@@ -61,17 +68,24 @@ fn fetch(args: StoreFetchArgs) -> Result<()> {
         && manifest_cache_path.exists()
     {
         let manifest_bytes = fs::read(&manifest_cache_path).with_context(|| {
-            format!(
-                "failed to read cached manifest {}",
-                manifest_cache_path.display()
+            i18n::tr_lit("failed to read cached manifest {}").replacen(
+                "{}",
+                &manifest_cache_path.display().to_string(),
+                1,
             )
         })?;
-        fs::write(&manifest_out_path, &manifest_bytes)
-            .with_context(|| format!("failed to write manifest {}", manifest_out_path.display()))?;
+        fs::write(&manifest_out_path, &manifest_bytes).with_context(|| {
+            i18n::tr_lit("failed to write manifest {}").replacen(
+                "{}",
+                &manifest_out_path.display().to_string(),
+                1,
+            )
+        })?;
         let manifest: Value = serde_json::from_slice(&manifest_bytes).with_context(|| {
-            format!(
-                "failed to parse component.manifest.json from {}",
-                manifest_cache_path.display()
+            i18n::tr_lit("failed to parse component.manifest.json from {}").replacen(
+                "{}",
+                &manifest_cache_path.display().to_string(),
+                1,
             )
         })?;
         if let Some(component_wasm) = manifest
@@ -82,31 +96,41 @@ fn fetch(args: StoreFetchArgs) -> Result<()> {
             let candidate = PathBuf::from(component_wasm);
             if wasm_override.is_none() {
                 wasm_out_path = normalize_under_root(&out_dir, &candidate).with_context(|| {
-                    format!("invalid artifacts.component_wasm path `{}`", component_wasm)
+                    i18n::tr_lit("invalid artifacts.component_wasm path `{}`").replacen(
+                        "{}",
+                        component_wasm,
+                        1,
+                    )
                 })?;
                 if let Some(parent) = wasm_out_path.parent() {
                     fs::create_dir_all(parent).with_context(|| {
-                        format!("failed to create output dir {}", parent.display())
+                        i18n::tr_lit("failed to create output dir {}").replacen(
+                            "{}",
+                            &parent.display().to_string(),
+                            1,
+                        )
                     })?;
                 }
             }
         }
     }
     fs::copy(&cache_path, &wasm_out_path).with_context(|| {
-        format!(
-            "failed to copy cached component {} to {}",
-            cache_path.display(),
-            wasm_out_path.display()
-        )
+        i18n::tr_lit("failed to copy cached component {} to {}")
+            .replacen("{}", &cache_path.display().to_string(), 1)
+            .replacen("{}", &wasm_out_path.display().to_string(), 1)
     })?;
     println!(
-        "Wrote {} (digest {}) for source {}",
-        wasm_out_path.display(),
-        resolved.digest,
-        source,
+        "{}",
+        i18n::tr_lit("Wrote {} (digest {}) for source {}")
+            .replacen("{}", &wasm_out_path.display().to_string(), 1)
+            .replacen("{}", &resolved.digest.to_string(), 1)
+            .replacen("{}", &source, 1)
     );
     if manifest_out_path.exists() {
-        println!("Wrote {}", manifest_out_path.display());
+        println!(
+            "{}",
+            i18n::tr_lit("Wrote {}").replacen("{}", &manifest_out_path.display().to_string(), 1)
+        );
     }
     Ok(())
 }
@@ -125,15 +149,17 @@ fn resolve_source(source: &str) -> Result<String> {
     let manifest_path = path.join("component.manifest.json");
     if manifest_path.exists() {
         let manifest_bytes = fs::read(&manifest_path).with_context(|| {
-            format!(
-                "failed to read component.manifest.json at {}",
-                manifest_path.display()
+            i18n::tr_lit("failed to read component.manifest.json at {}").replacen(
+                "{}",
+                &manifest_path.display().to_string(),
+                1,
             )
         })?;
         let manifest: Value = serde_json::from_slice(&manifest_bytes).with_context(|| {
-            format!(
-                "failed to parse component.manifest.json at {}",
-                manifest_path.display()
+            i18n::tr_lit("failed to parse component.manifest.json at {}").replacen(
+                "{}",
+                &manifest_path.display().to_string(),
+                1,
             )
         })?;
         if let Some(component_wasm) = manifest
@@ -143,7 +169,11 @@ fn resolve_source(source: &str) -> Result<String> {
         {
             let wasm_path =
                 normalize_under_root(path, Path::new(component_wasm)).with_context(|| {
-                    format!("invalid artifacts.component_wasm path `{}`", component_wasm)
+                    i18n::tr_lit("invalid artifacts.component_wasm path `{}`").replacen(
+                        "{}",
+                        component_wasm,
+                        1,
+                    )
                 })?;
             return Ok(format!("{prefix}{}", wasm_path.display()));
         }
@@ -155,8 +185,11 @@ fn resolve_source(source: &str) -> Result<String> {
     }
 
     Err(anyhow!(
-        "source directory {} does not contain component.manifest.json or component.wasm",
-        path.display()
+        "{}",
+        i18n::tr_lit(
+            "source directory {} does not contain component.manifest.json or component.wasm"
+        )
+        .replacen("{}", &path.display().to_string(), 1)
     ))
 }
 

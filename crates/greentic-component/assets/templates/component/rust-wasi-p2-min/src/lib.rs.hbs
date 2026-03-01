@@ -10,6 +10,12 @@ use greentic_types::schemas::common::schema_ir::{AdditionalProperties, SchemaIr}
 #[cfg(target_arch = "wasm32")]
 use greentic_types::schemas::component::v0_6_0::{ComponentInfo, I18nText};
 
+// i18n: runtime lookup + embedded CBOR bundle helpers.
+pub mod i18n;
+pub mod i18n_bundle;
+// qa: mode normalization, QA spec generation, apply-answers validation.
+pub mod qa;
+
 const COMPONENT_NAME: &str = "{{ name }}";
 const COMPONENT_ORG: &str = "{{ org }}";
 const COMPONENT_VERSION: &str = "{{ version }}";
@@ -24,6 +30,8 @@ struct Component;
 
 #[cfg(target_arch = "wasm32")]
 impl node::Guest for Component {
+    // Component metadata advertised to host/operator tooling.
+    // Extend here when you add more operations or capability declarations.
     fn describe() -> node::ComponentDescriptor {
         let input_schema_cbor = input_schema_cbor();
         let output_schema_cbor = output_schema_cbor();
@@ -32,26 +40,75 @@ impl node::Guest for Component {
             version: COMPONENT_VERSION.to_string(),
             summary: Some(format!("Greentic component {COMPONENT_NAME}")),
             capabilities: Vec::new(),
-            ops: vec![node::Op {
-                name: "handle_message".to_string(),
-                summary: Some("Handle a single message input".to_string()),
-                input: node::IoSchema {
-                    schema: node::SchemaSource::InlineCbor(input_schema_cbor),
-                    content_type: "application/cbor".to_string(),
-                    schema_version: None,
+            ops: vec![
+                node::Op {
+                    name: "handle_message".to_string(),
+                    summary: Some("Handle a single message input".to_string()),
+                    input: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    output: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    examples: Vec::new(),
                 },
-                output: node::IoSchema {
-                    schema: node::SchemaSource::InlineCbor(output_schema_cbor),
-                    content_type: "application/cbor".to_string(),
-                    schema_version: None,
+                node::Op {
+                    name: "qa-spec".to_string(),
+                    summary: Some("Return QA spec (CBOR) for a requested mode".to_string()),
+                    input: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    output: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    examples: Vec::new(),
                 },
-                examples: Vec::new(),
-            }],
+                node::Op {
+                    name: "apply-answers".to_string(),
+                    summary: Some("Apply QA answers and optionally return config override".to_string()),
+                    input: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    output: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    examples: Vec::new(),
+                },
+                node::Op {
+                    name: "i18n-keys".to_string(),
+                    summary: Some("Return i18n keys referenced by QA/setup".to_string()),
+                    input: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    output: node::IoSchema {
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    },
+                    examples: Vec::new(),
+                },
+            ],
             schemas: Vec::new(),
             setup: None,
         }
     }
 
+    // Single ABI entrypoint. Keep this dispatcher model intact.
+    // Extend behavior by adding/adjusting operation branches in `run_component_cbor`.
     fn invoke(
         operation: String,
         envelope: node::InvocationEnvelope,
@@ -68,6 +125,7 @@ impl node::Guest for Component {
 #[cfg(target_arch = "wasm32")]
 greentic_interfaces_guest::export_component_v060!(Component);
 
+// Host-side metadata helper used by tooling/tests outside wasm runtime.
 pub fn describe_payload() -> String {
     serde_json::json!({
         "component": {
@@ -85,6 +143,8 @@ pub fn describe_payload() -> String {
     .to_string()
 }
 
+// Default user-operation implementation.
+// Replace this with domain logic for your component.
 pub fn handle_message(operation: &str, input: &str) -> String {
     format!("{COMPONENT_NAME}::{operation} => {}", input.trim())
 }
@@ -95,6 +155,28 @@ fn encode_cbor<T: serde::Serialize>(value: &T) -> Vec<u8> {
 }
 
 #[cfg(target_arch = "wasm32")]
+// Accept canonical CBOR first, then fall back to JSON for local debugging.
+fn parse_payload(input: &[u8]) -> serde_json::Value {
+    if let Ok(value) = canonical::from_cbor(input) {
+        return value;
+    }
+    serde_json::from_slice(input).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+#[cfg(target_arch = "wasm32")]
+// Keep ingress compatibility: default/setup/install -> setup, update/upgrade -> update.
+fn normalized_mode(payload: &serde_json::Value) -> qa::NormalizedMode {
+    let mode = payload
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.get("operation").and_then(|v| v.as_str()))
+        .unwrap_or("setup");
+    qa::normalize_mode(mode).unwrap_or(qa::NormalizedMode::Setup)
+}
+
+#[cfg(target_arch = "wasm32")]
+// Minimal schema for generic operation input.
+// Extend these schemas when you harden operation contracts.
 fn input_schema() -> SchemaIr {
     SchemaIr::Object {
         properties: BTreeMap::from([(
@@ -175,10 +257,26 @@ fn config_schema_cbor() -> Vec<u8> {
 }
 
 #[cfg(target_arch = "wasm32")]
+// Central operation dispatcher.
+// This is the primary extension point for new operations.
 fn run_component_cbor(operation: &str, input: Vec<u8>) -> Vec<u8> {
-    let invocation: Result<serde_json::Value, _> = canonical::from_cbor(&input);
-    let output = match invocation {
-        Ok(value) => {
+    let value = parse_payload(&input);
+    let output = match operation {
+        "qa-spec" => {
+            let mode = normalized_mode(&value);
+            qa::qa_spec_json(mode)
+        }
+        "apply-answers" => {
+            let mode = normalized_mode(&value);
+            qa::apply_answers(mode, &value)
+        }
+        "i18n-keys" => serde_json::Value::Array(
+            qa::i18n_keys()
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+        _ => {
             let op_name = value
                 .get("operation")
                 .and_then(|v| v.as_str())
@@ -192,12 +290,6 @@ fn run_component_cbor(operation: &str, input: Vec<u8>) -> Vec<u8> {
                 "message": handle_message(op_name, &input_text)
             })
         }
-        Err(err) => serde_json::json!({
-            "error": {
-                "code": "SCHEMA_INVALID",
-                "message": err.to_string()
-            }
-        }),
     };
 
     encode_cbor(&output)

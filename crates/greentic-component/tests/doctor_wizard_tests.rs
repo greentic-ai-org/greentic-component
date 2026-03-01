@@ -32,7 +32,6 @@ fn doctor_rejects_unbuilt_wizard_scaffold() {
         qa_answers: Some(answers_path),
         qa_answers_out: None,
         plan_out: None,
-        locale: None,
         project_root: temp.path().to_path_buf(),
         template: None,
         full_tests: false,

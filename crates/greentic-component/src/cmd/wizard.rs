@@ -1,7 +1,5 @@
 #![cfg(feature = "cli")]
 
-use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
@@ -12,28 +10,14 @@ use clap::{Args, ValueEnum};
 use greentic_qa_lib::{
     I18nConfig, QaLibError, ResolvedI18nMap, WizardDriver, WizardFrontend, WizardRunConfig,
 };
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
-use unic_langid::LanguageIdentifier;
 
 use crate::cmd::build::BuildArgs;
 use crate::cmd::doctor::{DoctorArgs, DoctorFormat};
+use crate::cmd::i18n;
 use crate::scaffold::validate::{ComponentName, normalize_version};
 use crate::wizard::{self, AnswersPayload, WizardPlanEnvelope, WizardPlanMetadata, WizardStep};
-
-static EN_MESSAGES: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
-    let raw = include_str!("../../i18n/en.json");
-    serde_json::from_str(raw).unwrap_or_default()
-});
-
-const SUPPORTED_LOCALES: &[&str] = &[
-    "ar", "ar-AE", "ar-DZ", "ar-EG", "ar-IQ", "ar-MA", "ar-SA", "ar-SD", "ar-SY", "ar-TN", "ay",
-    "bg", "bn", "cs", "da", "de", "el", "en", "en-GB", "es", "et", "fa", "fi", "fr", "gn", "gu",
-    "hi", "hr", "ht", "hu", "id", "it", "ja", "km", "kn", "ko", "lo", "lt", "lv", "ml", "mr", "ms",
-    "my", "nah", "ne", "nl", "no", "pa", "pl", "pt", "qu", "ro", "ru", "si", "sk", "sr", "sv",
-    "ta", "te", "th", "tl", "tr", "uk", "ur", "vi", "zh",
-];
 
 #[derive(Args, Debug, Clone)]
 pub struct WizardArgs {
@@ -59,8 +43,6 @@ pub struct WizardArgs {
     pub qa_answers_out: Option<PathBuf>,
     #[arg(long = "plan-out", value_name = "plan.json")]
     pub plan_out: Option<PathBuf>,
-    #[arg(long = "locale", value_name = "LOCALE")]
-    pub locale: Option<String>,
     #[arg(long = "project-root", value_name = "PATH", default_value = ".")]
     pub project_root: PathBuf,
     #[arg(long = "template", value_name = "TEMPLATE_ID")]
@@ -548,7 +530,7 @@ fn default_answers_for(args: &WizardArgs) -> WizardRunAnswers {
 }
 
 fn collect_interactive_answers(args: &WizardArgs) -> Result<WizardRunAnswers> {
-    let locale = select_locale(args.locale.clone(), SUPPORTED_LOCALES);
+    let locale = i18n::selected_locale().to_string();
     let config = WizardRunConfig {
         spec_json: build_qa_spec(args).to_string(),
         initial_answers_json: Some(default_qa_answers(args).to_string()),
@@ -638,7 +620,7 @@ fn collect_interactive_answers(args: &WizardArgs) -> Result<WizardRunAnswers> {
 }
 
 fn build_qa_spec(args: &WizardArgs) -> JsonValue {
-    let locale = select_locale(args.locale.clone(), SUPPORTED_LOCALES);
+    let locale = i18n::selected_locale().to_string();
     let questions = match args.mode {
         RunMode::Create => {
             let templates = available_template_ids();
@@ -722,75 +704,6 @@ fn build_qa_spec(args: &WizardArgs) -> JsonValue {
     })
 }
 
-fn detect_env_locale() -> Option<String> {
-    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(val) = env::var(key) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn detect_system_locale() -> Option<String> {
-    sys_locale::get_locale()
-}
-
-fn normalize_locale(raw: &str) -> Option<String> {
-    let mut cleaned = raw.trim();
-    if cleaned.is_empty() {
-        return None;
-    }
-    if let Some((head, _)) = cleaned.split_once('.') {
-        cleaned = head;
-    }
-    if let Some((head, _)) = cleaned.split_once('@') {
-        cleaned = head;
-    }
-    let cleaned = cleaned.replace('_', "-");
-    cleaned
-        .parse::<LanguageIdentifier>()
-        .ok()
-        .map(|lid| lid.to_string())
-}
-
-fn base_language(tag: &str) -> Option<String> {
-    tag.split('-').next().map(|s| s.to_ascii_lowercase())
-}
-
-fn resolve_supported_locale(candidate: &str, supported: &[&str]) -> Option<String> {
-    let norm = normalize_locale(candidate)?;
-    if supported.iter().any(|s| *s == norm) {
-        return Some(norm);
-    }
-    let base = base_language(&norm)?;
-    if supported.iter().any(|s| *s == base) {
-        return Some(base);
-    }
-    None
-}
-
-fn select_locale(cli_locale: Option<String>, supported: &[&str]) -> String {
-    if let Some(cli) = cli_locale.as_deref()
-        && let Some(found) = resolve_supported_locale(cli, supported)
-    {
-        return found;
-    }
-    if let Some(env_loc) = detect_env_locale()
-        && let Some(found) = resolve_supported_locale(&env_loc, supported)
-    {
-        return found;
-    }
-    if let Some(sys_loc) = detect_system_locale()
-        && let Some(found) = resolve_supported_locale(&sys_loc, supported)
-    {
-        return found;
-    }
-    "en".to_string()
-}
-
 fn default_qa_answers(args: &WizardArgs) -> JsonValue {
     let mut map = JsonMap::new();
     if args.mode == RunMode::Create
@@ -816,24 +729,7 @@ fn default_template_id() -> String {
 }
 
 fn build_resolved_i18n(locale: &str) -> ResolvedI18nMap {
-    let mut merged = EN_MESSAGES.clone();
-    if locale == "en" {
-        return merged;
-    }
-    if let Some(overrides) = load_locale_messages(locale) {
-        for (key, value) in overrides {
-            merged.insert(key, value);
-        }
-    }
-    merged
-}
-
-fn load_locale_messages(locale: &str) -> Option<BTreeMap<String, String>> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("i18n")
-        .join(format!("{locale}.json"));
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    i18n::resolved_catalog(locale)
 }
 
 fn mode_name(mode: RunMode) -> &'static str {
@@ -1159,10 +1055,7 @@ fn enum_choice_label<'a>(question_id: &str, choice: &'a str) -> &'a str {
 }
 
 fn tr(key: &str) -> String {
-    EN_MESSAGES
-        .get(key)
-        .cloned()
-        .unwrap_or_else(|| key.to_string())
+    i18n::tr_key(key)
 }
 
 fn trf(key: &str, args: &[&str]) -> String {

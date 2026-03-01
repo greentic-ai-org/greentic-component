@@ -20,13 +20,14 @@ impl DependencyMode {
         match env::var("GREENTIC_DEP_MODE") {
             Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
                 "cratesio" | "crates-io" | "crates_io" => DependencyMode::CratesIo,
-                "local" | "" => DependencyMode::Local,
+                "local" => DependencyMode::Local,
+                "" => DependencyMode::CratesIo,
                 _ => {
-                    eprintln!("Unknown GREENTIC_DEP_MODE='{value}', defaulting to local mode");
-                    DependencyMode::Local
+                    eprintln!("Unknown GREENTIC_DEP_MODE='{value}', defaulting to cratesio mode");
+                    DependencyMode::CratesIo
                 }
             },
-            Err(_) => DependencyMode::Local,
+            Err(_) => DependencyMode::CratesIo,
         }
     }
 
@@ -38,8 +39,8 @@ impl DependencyMode {
     }
 }
 
-const GREENTIC_TYPES_VERSION: &str = "0.4.49";
-const GREENTIC_INTERFACES_GUEST_VERSION: &str = "0.4.93";
+const GREENTIC_TYPES_VERSION: &str = "0.4";
+const GREENTIC_INTERFACES_GUEST_VERSION: &str = "0.4";
 const GREENTIC_INTERFACES_VERSION: &str = "0.4.93";
 
 #[derive(Debug, Clone)]
@@ -244,7 +245,7 @@ name = "demo"
 version = "0.1.0"
 
 [package.metadata.component.target]
-world = "greentic:component/component-v0-v6-v0@0.6.0"
+world = "greentic:component/component@0.6.0"
 "#,
         )
         .unwrap();

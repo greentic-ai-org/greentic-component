@@ -3,6 +3,7 @@ pub mod component_world;
 pub mod doctor;
 pub mod flow;
 pub mod hash;
+pub mod i18n;
 pub mod inspect;
 pub mod new;
 pub mod path;

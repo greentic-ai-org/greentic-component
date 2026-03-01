@@ -1,6 +1,5 @@
 ---
 source: crates/greentic-component/tests/new_scaffold.rs
-assertion_line: 80
 expression: normalize_text(cargo.trim())
 ---
 [package]
@@ -11,6 +10,7 @@ license = "MIT"
 rust-version = "1.91"
 description = "Greentic component demo-component"
 repository = "https://github.com/demo-component"
+build = "build.rs"
 authors = ["Greentic Labs"]
 
 [lib]
@@ -20,13 +20,17 @@ crate-type = ["cdylib", "rlib"]
 package = "greentic:component"
 
 [package.metadata.component.target]
-world = "greentic:component/component-v0-v6-v0@0.6.0"
+world = "greentic:component/component@0.6.0"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-greentic-interfaces-guest = { version = "0.4.93", default-features = false, features = ["component-v0-6"] }
-greentic-types = { version = "0.4.49" }
+greentic-interfaces-guest = { version = "0.4", default-features = false, features = ["component-v0-6"] }
+greentic-types = { version = "0.4" }
+
+[build-dependencies]
+serde_json = "1"
+greentic-types = { version = "0.4" }
 
 [dev-dependencies]
 serde_json = "1"

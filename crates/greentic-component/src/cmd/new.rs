@@ -11,6 +11,7 @@ use clap::Args;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::cmd::i18n;
 use crate::cmd::post::{self, GitInitStatus, PostInitReport};
 use crate::scaffold::deps::DependencyMode;
 use crate::scaffold::engine::{
@@ -79,19 +80,27 @@ pub fn run(args: NewArgs, engine: &ScaffoldEngine) -> Result<()> {
         }
     };
     if !args.json {
-        println!("scaffolding component...");
+        println!("{}", i18n::tr_lit("scaffolding component..."));
         println!(
-            "  - template: {} -> {}",
-            request.template_id,
-            request.path.display()
+            "{}",
+            i18n::tr_lit("- template: {} -> {}")
+                .replacen("{}", &request.template_id, 1)
+                .replacen("{}", &request.path.display().to_string(), 1)
         );
-        println!("  - wit world: {}", request.wit_world);
+        println!(
+            "{}",
+            i18n::tr_lit("- wit world: {}").replacen("{}", &request.wit_world, 1)
+        );
         stdout().flush().ok();
     }
     let scaffold_started = Instant::now();
     let outcome = engine.scaffold(request)?;
     if !args.json {
-        println!("scaffolded files in {:.2?}", scaffold_started.elapsed());
+        println!(
+            "{}",
+            i18n::tr_lit("scaffolded files in {:.2?}")
+                .replace("{:.2?}", &format!("{:.2?}", scaffold_started.elapsed()))
+        );
         stdout().flush().ok();
     }
     let post_started = Instant::now();
@@ -99,7 +108,10 @@ pub fn run(args: NewArgs, engine: &ScaffoldEngine) -> Result<()> {
     let post_init = post::run_post_init(&outcome, skip_git);
     if !args.json && !args.no_check {
         println!(
-            "running cargo check --target wasm32-wasip2 (downloads toolchain on first run)... "
+            "{}",
+            i18n::tr_lit(
+                "running cargo check --target wasm32-wasip2 (downloads toolchain on first run)...",
+            )
         );
         stdout().flush().ok();
     }
@@ -113,10 +125,17 @@ pub fn run(args: NewArgs, engine: &ScaffoldEngine) -> Result<()> {
         print_json(&payload)?;
     } else {
         print_human(&outcome, &compile_check, &post_init);
-        println!("post-init + checks in {:.2?}", post_started.elapsed());
+        println!(
+            "{}",
+            i18n::tr_lit("post-init + checks in {:.2?}")
+                .replace("{:.2?}", &format!("{:.2?}", post_started.elapsed()))
+        );
     }
     if compile_check.ran && !compile_check.passed {
-        anyhow::bail!("cargo check --target wasm32-wasip2 failed");
+        anyhow::bail!(
+            "{}",
+            i18n::tr_lit("cargo check --target wasm32-wasip2 failed")
+        );
     }
     Ok(())
 }
@@ -156,24 +175,29 @@ fn print_human(outcome: &ScaffoldOutcome, check: &CompileCheckReport, post: &Pos
     println!("{}", outcome.human_summary());
     print_template_metadata(outcome);
     for path in &outcome.created {
-        println!("  - {path}");
+        println!("{}", i18n::tr_lit("- {path}").replace("{path}", path));
     }
     print_git_summary(&post.git);
     if !check.ran {
-        println!("cargo check (wasm32-wasip2): skipped (--no-check)");
+        println!(
+            "{}",
+            i18n::tr_lit("cargo check (wasm32-wasip2): skipped (--no-check)")
+        );
     } else if check.passed {
         if let Some(ms) = check.duration_ms {
             println!(
-                "cargo check (wasm32-wasip2): ok ({:.2}s)",
-                ms as f64 / 1000.0
+                "{}",
+                i18n::tr_lit("cargo check (wasm32-wasip2): ok ({:.2}s)")
+                    .replace("{:.2}", &format!("{:.2}", ms as f64 / 1000.0))
             );
         } else {
-            println!("cargo check (wasm32-wasip2): ok");
+            println!("{}", i18n::tr_lit("cargo check (wasm32-wasip2): ok"));
         }
     } else {
         println!(
-            "cargo check (wasm32-wasip2): FAILED (exit code {:?})",
-            check.exit_code
+            "{}",
+            i18n::tr_lit("cargo check (wasm32-wasip2): FAILED (exit code {:?})")
+                .replace("{:?}", &format!("{:?}", check.exit_code))
         );
         if let Some(stderr) = &check.stderr
             && !stderr.is_empty()
@@ -182,9 +206,9 @@ fn print_human(outcome: &ScaffoldOutcome, check: &CompileCheckReport, post: &Pos
         }
     }
     if !post.next_steps.is_empty() {
-        println!("Next steps:");
+        println!("{}", i18n::tr_lit("Next steps:"));
         for step in &post.next_steps {
-            println!("  $ {step}");
+            println!("{}", i18n::tr_lit("$ {step}").replace("{step}", step));
         }
     }
 }
@@ -193,42 +217,61 @@ fn print_git_summary(report: &post::GitInitReport) {
     match report.status {
         GitInitStatus::Initialized => {
             if let Some(commit) = &report.commit {
-                println!("git init: ok (commit {commit})");
+                println!(
+                    "{}",
+                    i18n::tr_lit("git init: ok (commit {commit})").replace("{commit}", commit)
+                );
             } else {
-                println!("git init: ok");
+                println!("{}", i18n::tr_lit("git init: ok"));
             }
         }
         GitInitStatus::AlreadyPresent => {
             println!(
-                "git init: skipped ({})",
-                report
-                    .message
-                    .as_deref()
-                    .unwrap_or("directory already contains .git")
+                "{}",
+                i18n::tr_lit("git init: skipped ({})").replacen(
+                    "{}",
+                    report
+                        .message
+                        .as_deref()
+                        .unwrap_or("directory already contains .git"),
+                    1
+                )
             );
         }
         GitInitStatus::InsideWorktree => {
             println!(
-                "git init: skipped ({})",
-                report
-                    .message
-                    .as_deref()
-                    .unwrap_or("already inside an existing git worktree")
+                "{}",
+                i18n::tr_lit("git init: skipped ({})").replacen(
+                    "{}",
+                    report
+                        .message
+                        .as_deref()
+                        .unwrap_or("already inside an existing git worktree"),
+                    1
+                )
             );
         }
         GitInitStatus::Skipped => {
             println!(
-                "git init: skipped ({})",
-                report.message.as_deref().unwrap_or("not requested")
+                "{}",
+                i18n::tr_lit("git init: skipped ({})").replacen(
+                    "{}",
+                    report.message.as_deref().unwrap_or("not requested"),
+                    1
+                )
             );
         }
         GitInitStatus::Failed => {
             println!(
-                "git init: failed ({})",
-                report
-                    .message
-                    .as_deref()
-                    .unwrap_or("see logs for more details")
+                "{}",
+                i18n::tr_lit("git init: failed ({})").replacen(
+                    "{}",
+                    report
+                        .message
+                        .as_deref()
+                        .unwrap_or("see logs for more details"),
+                    1
+                )
             );
         }
     }
@@ -236,11 +279,22 @@ fn print_git_summary(report: &post::GitInitReport) {
 
 fn print_template_metadata(outcome: &ScaffoldOutcome) {
     match &outcome.template_description {
-        Some(desc) => println!("Template: {} — {desc}", outcome.template),
-        None => println!("Template: {}", outcome.template),
+        Some(desc) => println!(
+            "{}",
+            i18n::tr_lit("Template: {} — {desc}")
+                .replacen("{}", &outcome.template, 1)
+                .replace("{desc}", desc)
+        ),
+        None => println!(
+            "{}",
+            i18n::tr_lit("Template: {}").replacen("{}", &outcome.template, 1)
+        ),
     }
     if !outcome.template_tags.is_empty() {
-        println!("  tags: {}", outcome.template_tags.join(", "));
+        println!(
+            "{}",
+            i18n::tr_lit("tags: {}").replacen("{}", &outcome.template_tags.join(", "), 1)
+        );
     }
 }
 

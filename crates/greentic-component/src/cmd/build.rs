@@ -17,6 +17,7 @@ use crate::cmd::component_world::{canonical_component_world, is_fallback_world};
 use crate::cmd::flow::{
     FlowUpdateResult, manifest_component_id, resolve_operation, update_with_manifest,
 };
+use crate::cmd::i18n;
 use crate::config::{
     ConfigInferenceOptions, ConfigSchemaSource, load_manifest_with_schema, resolve_manifest_path,
 };
@@ -79,7 +80,14 @@ pub fn run(args: BuildArgs) -> Result<()> {
         cwd.join(manifest_path)
     };
     if !manifest_path.exists() {
-        bail!("manifest not found at {}", manifest_path.display());
+        bail!(
+            "{}",
+            i18n::tr_lit("manifest not found at {}").replacen(
+                "{}",
+                &manifest_path.display().to_string(),
+                1
+            )
+        );
     }
     let cargo_bin = args
         .cargo_bin
@@ -286,7 +294,7 @@ fn check_canonical_world_export(manifest_dir: &Path, manifest: &JsonValue) -> Re
         Ok(exported) => println!("Exported world: {exported}"),
         Err(err) => match err {
             AbiError::WorldMismatch { expected, found } if is_fallback_world(&found) => {
-                println!("Exported world: fallback {found} (expected {expected})");
+                println!("Exported world: {expected} (compatible fallback export: {found})");
             }
             err => {
                 return Err(err)

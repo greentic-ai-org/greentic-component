@@ -1,6 +1,5 @@
 ---
 source: crates/greentic-component/tests/new_scaffold.rs
-assertion_line: 81
 expression: normalize_text(manifest.trim())
 ---
 {
@@ -38,6 +37,60 @@ expression: normalize_text(manifest.trim())
             "default": "Handled by demo-component"
           }
         }
+      }
+    },
+    {
+      "name": "qa-spec",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "apply-answers",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" },
+          "current_config": { "type": "object" },
+          "answers": { "type": "object" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["ok", "warnings", "errors"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "warnings": { "type": "array" },
+          "errors": { "type": "array" },
+          "config": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "i18n-keys",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "array",
+        "items": { "type": "string" }
       }
     }
   ],

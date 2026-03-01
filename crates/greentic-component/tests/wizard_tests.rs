@@ -33,7 +33,6 @@ fn wizard_create_execute_creates_template_files() {
         qa_answers: Some(answers_path),
         qa_answers_out: None,
         plan_out: None,
-        locale: None,
         project_root: temp.path().to_path_buf(),
         template: None,
         full_tests: false,
@@ -44,14 +43,15 @@ fn wizard_create_execute_creates_template_files() {
 
     let root = temp.path().join("demo-component");
     assert!(root.join("Cargo.toml").exists());
+    assert!(root.join("build.rs").exists());
     assert!(root.join("src/lib.rs").exists());
-    assert!(root.join("src/descriptor.rs").exists());
-    assert!(root.join("src/schema.rs").exists());
-    assert!(root.join("src/runtime.rs").exists());
     assert!(root.join("Makefile").exists());
     assert!(root.join("src/qa.rs").exists());
     assert!(root.join("src/i18n.rs").exists());
+    assert!(root.join("src/i18n_bundle.rs").exists());
     assert!(root.join("assets/i18n/en.json").exists());
+    assert!(root.join("assets/i18n/locales.json").exists());
+    assert!(root.join("tools/i18n.sh").exists());
 
     let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo_toml.contains("name = \"demo-component\""));
@@ -76,7 +76,6 @@ fn wizard_create_writes_answers_out_when_requested() {
         qa_answers: Some(answers_path),
         qa_answers_out: Some(answers_out.clone()),
         plan_out: Some(temp.path().join("out/plan.json")),
-        locale: None,
         project_root: temp.path().to_path_buf(),
         template: None,
         full_tests: false,
@@ -103,7 +102,6 @@ fn wizard_create_dry_run_does_not_write_files() {
         qa_answers: Some(answers_path),
         qa_answers_out: None,
         plan_out: Some(temp.path().join("plan.json")),
-        locale: None,
         project_root: temp.path().to_path_buf(),
         template: None,
         full_tests: false,

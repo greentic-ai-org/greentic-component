@@ -25,7 +25,7 @@ include = [
 path = "src/lib.rs"
 
 [features]
-default = ["oci", "cli"]
+default = ["oci", "cli", "store"]
 oci = ["dep:oci-distribution"]
 schema = ["dep:schemars"]
 abi = ["dep:wit-component", "dep:wit-parser", "dep:wasmparser"]

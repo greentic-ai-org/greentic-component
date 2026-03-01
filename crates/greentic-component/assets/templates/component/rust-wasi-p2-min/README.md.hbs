@@ -1,6 +1,6 @@
 # {{ name }}
 
-A minimal Rust + WASI-P2 Greentic component scaffolded via `greentic-component new`.
+A Rust + WASI-P2 Greentic component scaffolded via `greentic-component new`.
 
 Canonical world target: `greentic:component/component@0.6.0`.
 Legacy compatibility notes: `docs/vision/legacy.md` in the `greentic-component` repo.
@@ -24,8 +24,24 @@ Update the manifest hash by running `greentic-component hash component.manifest.
 Validate the artifact by running
 `greentic-component doctor target/wasm32-wasip2/release/{{ name_snake }}.wasm --manifest component.manifest.json`.
 
+## i18n Workflow
+
+```bash
+./tools/i18n.sh
+cargo build
+```
+
+- `tools/i18n.sh` reads `assets/i18n/locales.json` and generates locale JSON files from `assets/i18n/en.json`.
+- `build.rs` embeds all `assets/i18n/*.json` locale dictionaries into the WASM as a CBOR bundle.
+
+## QA Ops Local Test
+
+- `qa-spec`: emit/expect setup-mode DTO semantics (`setup|update|remove`); input accepts `default|setup|install|update|upgrade|remove`.
+- `apply-answers`: invoke with `{ "mode": "setup", "answers": {...}, "current_config": {...} }` (`install` accepted as alias).
+- `i18n-keys`: invoke with `{}` to list keys referenced by QA/setup paths.
+
 ## Next Steps
 
-- Implement domain-specific logic inside `src/lib.rs` (the 0.6 descriptor/schema/runtime exports are wired there).
-- Extend `schemas/` with the inputs/outputs your component expects.
+- Implement domain-specific logic inside `src/lib.rs`.
+- Extend `src/qa.rs` and `assets/i18n/en.json` with your real setup flow fields.
 - Wire additional capabilities or telemetry requirements into `component.manifest.json`.

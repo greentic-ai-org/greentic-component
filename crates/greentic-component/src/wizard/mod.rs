@@ -175,7 +175,7 @@ pub fn spec_scaffold(mode: WizardMode) -> ComponentQaSpec {
 
 pub fn apply_scaffold(request: WizardRequest, dry_run: bool) -> Result<ApplyResult> {
     let warnings = abi_warnings(&request.abi_version);
-    let (prefill_answers_json, prefill_answers_cbor, component_kind, mut mapping_warnings) =
+    let (prefill_answers_json, prefill_answers_cbor, mut mapping_warnings) =
         normalize_answers(request.answers, request.mode)?;
     let mut all_warnings = warnings;
     all_warnings.append(&mut mapping_warnings);
@@ -185,9 +185,6 @@ pub fn apply_scaffold(request: WizardRequest, dry_run: bool) -> Result<ApplyResu
         prefill_mode: request.mode,
         prefill_answers_cbor,
         prefill_answers_json,
-        required_capabilities: normalize_capabilities(request.required_capabilities)?,
-        provided_capabilities: normalize_capabilities(request.provided_capabilities)?,
-        component_kind,
     };
 
     let files = build_files(&context)?;
@@ -224,6 +221,19 @@ pub fn execute_plan(envelope: &WizardPlanEnvelope) -> Result<()> {
                     let bytes = decode_step_content(relative_path, content)?;
                     fs::write(&target, bytes)
                         .with_context(|| format!("wizard: failed to write {}", target.display()))?;
+                    #[cfg(unix)]
+                    if is_executable_heuristic(Path::new(relative_path)) {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mut permissions = fs::metadata(&target)
+                            .with_context(|| {
+                                format!("wizard: failed to stat {}", target.display())
+                            })?
+                            .permissions();
+                        permissions.set_mode(0o755);
+                        fs::set_permissions(&target, permissions).with_context(|| {
+                            format!("wizard: failed to set executable bit {}", target.display())
+                        })?;
+                    }
                 }
             }
             WizardStep::RunCli { command, .. } => {
@@ -246,6 +256,17 @@ pub fn execute_plan(envelope: &WizardPlanEnvelope) -> Result<()> {
     Ok(())
 }
 
+fn is_executable_heuristic(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("sh" | "bash" | "zsh" | "ps1")
+    ) || path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == "Makefile")
+        .unwrap_or(false)
+}
+
 pub fn load_answers_payload(path: &Path) -> Result<AnswersPayload> {
     let json = fs::read_to_string(path)
         .with_context(|| format!("wizard: failed to open answers file {}", path.display()))?;
@@ -262,32 +283,23 @@ struct WizardContext {
     prefill_mode: WizardMode,
     prefill_answers_cbor: Option<Vec<u8>>,
     prefill_answers_json: Option<String>,
-    required_capabilities: Vec<String>,
-    provided_capabilities: Vec<String>,
-    component_kind: String,
 }
 
-type NormalizedAnswers = (Option<String>, Option<Vec<u8>>, String, Vec<String>);
+type NormalizedAnswers = (Option<String>, Option<Vec<u8>>, Vec<String>);
 
 fn normalize_answers(
     answers: Option<AnswersPayload>,
     mode: WizardMode,
 ) -> Result<NormalizedAnswers> {
-    let mut warnings = Vec::new();
-    let mut component_kind = "tool".to_string();
+    let warnings = Vec::new();
     let Some(payload) = answers else {
-        return Ok((None, None, component_kind, warnings));
+        return Ok((None, None, warnings));
     };
     let mut value: JsonValue = serde_json::from_str(&payload.json).with_context(|| {
         "wizard: answers JSON payload should be valid after initial parse".to_string()
     })?;
     let JsonValue::Object(mut root) = value else {
-        return Ok((
-            Some(payload.json),
-            Some(payload.cbor),
-            component_kind,
-            warnings,
-        ));
+        return Ok((Some(payload.json), Some(payload.cbor), warnings));
     };
 
     let enabled = extract_bool(&root, &["component.features.enabled", "enabled"]);
@@ -300,21 +312,11 @@ fn normalize_answers(
         root.insert("enabled".to_string(), JsonValue::Bool(true));
     }
 
-    if let Some(kind) = extract_string(&root, &["component.kind", "kind"]) {
-        if matches!(kind.as_str(), "tool" | "source") {
-            component_kind = kind;
-        } else {
-            warnings.push(format!(
-                "wizard: unsupported component.kind value `{kind}`; using `tool`"
-            ));
-        }
-    }
-
     value = JsonValue::Object(root);
     let json = serde_json::to_string_pretty(&value)?;
     let cbor = canonical::to_canonical_cbor_allow_floats(&value)
         .map_err(|err| anyhow!("wizard: failed to encode normalized answers as CBOR: {err}"))?;
-    Ok((Some(json), Some(cbor), component_kind, warnings))
+    Ok((Some(json), Some(cbor), warnings))
 }
 
 fn extract_bool(root: &JsonMap<String, JsonValue>, keys: &[&str]) -> Option<bool> {
@@ -331,28 +333,8 @@ fn extract_bool(root: &JsonMap<String, JsonValue>, keys: &[&str]) -> Option<bool
     None
 }
 
-fn extract_string(root: &JsonMap<String, JsonValue>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(value) = root.get(*key)
-            && let Some(s) = value.as_str()
-        {
-            return Some(s.to_string());
-        }
-        if let Some(s) = nested_string(root, key) {
-            return Some(s);
-        }
-    }
-    None
-}
-
 fn nested_bool(root: &JsonMap<String, JsonValue>, dotted: &str) -> Option<bool> {
     nested_value(root, dotted).and_then(|value| value.as_bool())
-}
-
-fn nested_string(root: &JsonMap<String, JsonValue>, dotted: &str) -> Option<String> {
-    nested_value(root, dotted)
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
 }
 
 fn nested_value<'a>(root: &'a JsonMap<String, JsonValue>, dotted: &str) -> Option<&'a JsonValue> {
@@ -368,20 +350,6 @@ fn nested_value<'a>(root: &'a JsonMap<String, JsonValue>, dotted: &str) -> Optio
     Some(current)
 }
 
-fn normalize_capabilities(capabilities: Vec<String>) -> Result<Vec<String>> {
-    let mut cleaned = Vec::new();
-    for capability in capabilities {
-        let trimmed = capability.trim();
-        if trimmed.is_empty() {
-            bail!("wizard: capability values cannot be empty");
-        }
-        cleaned.push(trimmed.to_string());
-    }
-    cleaned.sort();
-    cleaned.dedup();
-    Ok(cleaned)
-}
-
 struct GeneratedFile {
     path: PathBuf,
     contents: Vec<u8>,
@@ -394,13 +362,14 @@ fn build_files(context: &WizardContext) -> Result<Vec<GeneratedFile>> {
         text_file("README.md", render_readme(context)),
         text_file("component.manifest.json", render_manifest_json(context)),
         text_file("Makefile", render_makefile()),
-        text_file("src/lib.rs", render_lib_rs()),
-        text_file("src/descriptor.rs", render_descriptor_rs(context)),
-        text_file("src/schema.rs", render_schema_rs()),
-        text_file("src/runtime.rs", render_runtime_rs()),
-        text_file("src/qa.rs", render_qa_rs(context)),
+        text_file("build.rs", render_build_rs()),
+        text_file("src/lib.rs", render_lib_rs(context)),
+        text_file("src/qa.rs", render_qa_rs()),
         text_file("src/i18n.rs", render_i18n_rs()),
+        text_file("src/i18n_bundle.rs", render_i18n_bundle_rs()),
         text_file("assets/i18n/en.json", render_i18n_bundle()),
+        text_file("assets/i18n/locales.json", render_i18n_locales_json()),
+        text_file("tools/i18n.sh", render_i18n_sh()),
     ];
 
     if let (Some(json), Some(cbor)) = (
@@ -565,6 +534,7 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.91"
 description = "Greentic component {name}"
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -576,12 +546,16 @@ abi_version = "{abi_version}"
 package = "greentic:component"
 
 [package.metadata.component.target]
-world = "greentic:component/component-v0-v6-v0@0.6.0"
+world = "greentic:component/component@0.6.0"
 
 [dependencies]
 greentic-types = "0.4"
 greentic-interfaces-guest = {{ version = "0.4", default-features = false, features = ["component-v0-6"] }}
 serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+
+[build-dependencies]
+greentic-types = "0.4"
 serde_json = "1"
 "#,
         name = context.name,
@@ -596,9 +570,14 @@ fn render_readme(context: &WizardContext) -> String {
 Generated by `greentic-component wizard` for component@0.6.0.
 
 ## Next steps
-- Refine schemas in `src/schema.rs`.
-- Implement runtime logic in `src/runtime.rs`.
 - Extend QA flows in `src/qa.rs` and i18n keys in `src/i18n.rs`.
+- Generate/update locales via `./tools/i18n.sh`.
+- Rebuild to embed translations: `cargo build`.
+
+## QA ops
+- `qa-spec`: emits setup/update/remove semantics and accepts `default|setup|install|update|upgrade|remove`.
+- `apply-answers`: returns base response shape `{{ ok, config?, warnings, errors }}`.
+- `i18n-keys`: returns i18n keys used by QA/setup messaging.
 
 ## ABI version
 Requested ABI version: {abi_version}
@@ -674,47 +653,91 @@ fn render_manifest_json(context: &WizardContext) -> String {
   "id": "com.example.{name}",
   "name": "{name}",
   "version": "0.1.0",
-  "world": "greentic:component/component-v0-v6-v0@0.6.0",
+  "world": "greentic:component/component@0.6.0",
   "describe_export": "describe",
   "operations": [
     {{
-      "name": "run",
+      "name": "handle_message",
       "input_schema": {{
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "{name} input",
+        "title": "{name} handle input",
         "type": "object",
-        "required": ["message"],
+        "required": ["input"],
         "properties": {{
-          "message": {{
+          "input": {{
             "type": "string",
-            "default": "hello"
+            "default": "Hello from {name}!"
           }}
         }},
         "additionalProperties": false
       }},
       "output_schema": {{
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "{name} output",
+        "title": "{name} handle output",
         "type": "object",
-        "required": ["result"],
+        "required": ["message"],
         "properties": {{
-          "result": {{
+          "message": {{
             "type": "string"
           }}
         }},
         "additionalProperties": false
       }}
-    }}
-  ],
-  "default_operation": "run",
-  "config_schema": {{
-    "type": "object",
-    "required": ["enabled"],
-    "properties": {{
-      "enabled": {{
-        "type": "boolean"
+    }},
+    {{
+      "name": "qa-spec",
+      "input_schema": {{
+        "type": "object",
+        "properties": {{
+          "mode": {{ "type": "string" }}
+        }},
+        "additionalProperties": true
+      }},
+      "output_schema": {{
+        "type": "object",
+        "additionalProperties": true
       }}
     }},
+    {{
+      "name": "apply-answers",
+      "input_schema": {{
+        "type": "object",
+        "properties": {{
+          "mode": {{ "type": "string" }},
+          "current_config": {{ "type": "object" }},
+          "answers": {{ "type": "object" }}
+        }},
+        "additionalProperties": true
+      }},
+      "output_schema": {{
+        "type": "object",
+        "required": ["ok", "warnings", "errors"],
+        "properties": {{
+          "ok": {{ "type": "boolean" }},
+          "warnings": {{ "type": "array" }},
+          "errors": {{ "type": "array" }},
+          "config": {{ "type": "object" }}
+        }},
+        "additionalProperties": true
+      }}
+    }},
+    {{
+      "name": "i18n-keys",
+      "input_schema": {{
+        "type": "object",
+        "additionalProperties": true
+      }},
+      "output_schema": {{
+        "type": "array",
+        "items": {{ "type": "string" }}
+      }}
+    }}
+  ],
+  "default_operation": "handle_message",
+  "config_schema": {{
+    "type": "object",
+    "required": [],
+    "properties": {{}},
     "additionalProperties": false
   }},
   "supports": ["messaging"],
@@ -776,326 +799,482 @@ fn render_manifest_json(context: &WizardContext) -> String {
     )
 }
 
-fn render_lib_rs() -> String {
-    r#"use greentic_interfaces_guest::component_v0_6::node;
+fn render_lib_rs(context: &WizardContext) -> String {
+    format!(
+        r#"#[cfg(target_arch = "wasm32")]
+use std::collections::BTreeMap;
 
-pub mod descriptor;
-pub mod schema;
-mod runtime;
-pub mod qa;
+#[cfg(target_arch = "wasm32")]
+use greentic_interfaces_guest::component_v0_6::node;
+#[cfg(target_arch = "wasm32")]
+use greentic_types::cbor::canonical;
+#[cfg(target_arch = "wasm32")]
+use greentic_types::schemas::common::schema_ir::{{AdditionalProperties, SchemaIr}};
+#[cfg(target_arch = "wasm32")]
+use greentic_types::schemas::component::v0_6_0::{{ComponentInfo, I18nText}};
+
+// i18n: runtime lookup + embedded CBOR bundle helpers.
 pub mod i18n;
+pub mod i18n_bundle;
+// qa: mode normalization, QA spec generation, apply-answers validation.
+pub mod qa;
+
+const COMPONENT_NAME: &str = "{name}";
+const COMPONENT_ORG: &str = "com.example";
+const COMPONENT_VERSION: &str = "0.1.0";
 
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = ".greentic.wasi")]
 static WASI_TARGET_MARKER: [u8; 13] = *b"wasm32-wasip2";
 
+#[cfg(target_arch = "wasm32")]
 struct Component;
 
-impl node::Guest for Component {
-    fn describe() -> node::ComponentDescriptor {
-        let info = descriptor::info();
-        node::ComponentDescriptor {
-            name: info.id,
-            version: info.version,
-            summary: Some("Generated by greentic-component wizard".to_string()),
+#[cfg(target_arch = "wasm32")]
+impl node::Guest for Component {{
+    // Component metadata advertised to host/operator tooling.
+    // Extend here when you add more operations or capability declarations.
+    fn describe() -> node::ComponentDescriptor {{
+        let input_schema_cbor = input_schema_cbor();
+        let output_schema_cbor = output_schema_cbor();
+        node::ComponentDescriptor {{
+            name: COMPONENT_NAME.to_string(),
+            version: COMPONENT_VERSION.to_string(),
+            summary: Some(format!("Greentic component {{COMPONENT_NAME}}")),
             capabilities: Vec::new(),
-            ops: vec![node::Op {
-                name: "run".to_string(),
-                summary: Some("Run the component with CBOR payload".to_string()),
-                input: node::IoSchema {
-                    schema: node::SchemaSource::InlineCbor(schema::input_schema_cbor()),
-                    content_type: "application/cbor".to_string(),
-                    schema_version: None,
-                },
-                output: node::IoSchema {
-                    schema: node::SchemaSource::InlineCbor(schema::output_schema_cbor()),
-                    content_type: "application/cbor".to_string(),
-                    schema_version: None,
-                },
-                examples: Vec::new(),
-            }],
+            ops: vec![
+                node::Op {{
+                    name: "handle_message".to_string(),
+                    summary: Some("Handle a single message input".to_string()),
+                    input: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    output: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    examples: Vec::new(),
+                }},
+                node::Op {{
+                    name: "qa-spec".to_string(),
+                    summary: Some("Return QA spec for requested mode".to_string()),
+                    input: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    output: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    examples: Vec::new(),
+                }},
+                node::Op {{
+                    name: "apply-answers".to_string(),
+                    summary: Some("Apply QA answers and optionally return config override".to_string()),
+                    input: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    output: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    examples: Vec::new(),
+                }},
+                node::Op {{
+                    name: "i18n-keys".to_string(),
+                    summary: Some("Return i18n keys referenced by QA/setup".to_string()),
+                    input: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    output: node::IoSchema {{
+                        schema: node::SchemaSource::InlineCbor(output_schema_cbor),
+                        content_type: "application/cbor".to_string(),
+                        schema_version: None,
+                    }},
+                    examples: Vec::new(),
+                }},
+            ],
             schemas: Vec::new(),
             setup: None,
-        }
-    }
+        }}
+    }}
 
+    // Single ABI entrypoint. Keep this dispatcher model intact.
+    // Extend behavior by adding/adjusting operation branches in `run_component_cbor`.
     fn invoke(
         operation: String,
         envelope: node::InvocationEnvelope,
-    ) -> Result<node::InvocationResult, node::NodeError> {
-        let (output, _new_state) = runtime::run(envelope.payload_cbor, Vec::new());
-        let output = if operation == "run" {
-            output
-        } else {
-            runtime::run(
-                greentic_types::cbor::canonical::to_canonical_cbor_allow_floats(&serde_json::json!({
-                    "message": format!("unsupported operation: {operation}")
-                }))
-                .unwrap_or_default(),
-                Vec::new(),
-            )
-            .0
-        };
-        Ok(node::InvocationResult {
+    ) -> Result<node::InvocationResult, node::NodeError> {{
+        let output = run_component_cbor(&operation, envelope.payload_cbor);
+        Ok(node::InvocationResult {{
             ok: true,
             output_cbor: output,
             output_metadata_cbor: None,
-        })
-    }
-}
+        }})
+    }}
+}}
 
 #[cfg(target_arch = "wasm32")]
 greentic_interfaces_guest::export_component_v060!(Component);
-"#
-    .to_string()
+
+// Default user-operation implementation.
+// Replace this with domain logic for your component.
+pub fn handle_message(operation: &str, input: &str) -> String {{
+    format!("{{COMPONENT_NAME}}::{{operation}} => {{}}", input.trim())
+}}
+
+#[cfg(target_arch = "wasm32")]
+fn encode_cbor<T: serde::Serialize>(value: &T) -> Vec<u8> {{
+    canonical::to_canonical_cbor_allow_floats(value).expect("encode cbor")
+}}
+
+#[cfg(target_arch = "wasm32")]
+// Accept canonical CBOR first, then fall back to JSON for local debugging.
+fn parse_payload(input: &[u8]) -> serde_json::Value {{
+    if let Ok(value) = canonical::from_cbor(input) {{
+        return value;
+    }}
+    serde_json::from_slice(input).unwrap_or_else(|_| serde_json::json!({{}}))
+}}
+
+#[cfg(target_arch = "wasm32")]
+// Keep ingress compatibility: default/setup/install -> setup, update/upgrade -> update.
+fn normalized_mode(payload: &serde_json::Value) -> qa::NormalizedMode {{
+    let mode = payload
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.get("operation").and_then(|v| v.as_str()))
+        .unwrap_or("setup");
+    qa::normalize_mode(mode).unwrap_or(qa::NormalizedMode::Setup)
+}}
+
+#[cfg(target_arch = "wasm32")]
+// Minimal schema for generic operation input.
+// Extend these schemas when you harden operation contracts.
+fn input_schema() -> SchemaIr {{
+    SchemaIr::Object {{
+        properties: BTreeMap::from([(
+            "input".to_string(),
+            SchemaIr::String {{
+                min_len: Some(0),
+                max_len: None,
+                regex: None,
+                format: None,
+            }},
+        )]),
+        required: vec!["input".to_string()],
+        additional: AdditionalProperties::Allow,
+    }}
+}}
+
+#[cfg(target_arch = "wasm32")]
+fn output_schema() -> SchemaIr {{
+    SchemaIr::Object {{
+        properties: BTreeMap::from([(
+            "message".to_string(),
+            SchemaIr::String {{
+                min_len: Some(0),
+                max_len: None,
+                regex: None,
+                format: None,
+            }},
+        )]),
+        required: vec!["message".to_string()],
+        additional: AdditionalProperties::Allow,
+    }}
+}}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
+fn config_schema() -> SchemaIr {{
+    SchemaIr::Object {{
+        properties: BTreeMap::new(),
+        required: Vec::new(),
+        additional: AdditionalProperties::Forbid,
+    }}
+}}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
+fn component_info() -> ComponentInfo {{
+    ComponentInfo {{
+        id: format!("{{COMPONENT_ORG}}.{{COMPONENT_NAME}}"),
+        version: COMPONENT_VERSION.to_string(),
+        role: "tool".to_string(),
+        display_name: Some(I18nText::new("component.display_name", Some(COMPONENT_NAME.to_string()))),
+    }}
+}}
+
+#[cfg(target_arch = "wasm32")]
+fn input_schema_cbor() -> Vec<u8> {{
+    encode_cbor(&input_schema())
+}}
+
+#[cfg(target_arch = "wasm32")]
+fn output_schema_cbor() -> Vec<u8> {{
+    encode_cbor(&output_schema())
+}}
+
+#[cfg(target_arch = "wasm32")]
+// Central operation dispatcher.
+// This is the primary extension point for new operations.
+fn run_component_cbor(operation: &str, input: Vec<u8>) -> Vec<u8> {{
+    let value = parse_payload(&input);
+    let output = match operation {{
+        "qa-spec" => {{
+            let mode = normalized_mode(&value);
+            qa::qa_spec_json(mode)
+        }}
+        "apply-answers" => {{
+            let mode = normalized_mode(&value);
+            qa::apply_answers(mode, &value)
+        }}
+        "i18n-keys" => serde_json::Value::Array(
+            qa::i18n_keys()
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+        _ => {{
+            let op_name = value
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .unwrap_or(operation);
+            let input_text = value
+                .get("input")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            serde_json::json!({{
+                "message": handle_message(op_name, &input_text)
+            }})
+        }}
+    }};
+    encode_cbor(&output)
+}}
+"#,
+        name = context.name
+    )
 }
 
-fn render_qa_rs(context: &WizardContext) -> String {
-    let (default_prefill, setup_prefill, update_prefill, remove_prefill) =
-        match context.prefill_answers_cbor.as_ref() {
-            Some(bytes) if context.prefill_mode == WizardMode::Default => (
-                bytes_literal(bytes),
-                "&[]".to_string(),
-                "&[]".to_string(),
-                "&[]".to_string(),
-            ),
-            Some(bytes) if context.prefill_mode == WizardMode::Setup => (
-                "&[]".to_string(),
-                bytes_literal(bytes),
-                "&[]".to_string(),
-                "&[]".to_string(),
-            ),
-            Some(bytes) if context.prefill_mode == WizardMode::Update => (
-                "&[]".to_string(),
-                "&[]".to_string(),
-                bytes_literal(bytes),
-                "&[]".to_string(),
-            ),
-            Some(bytes) if context.prefill_mode == WizardMode::Remove => (
-                "&[]".to_string(),
-                "&[]".to_string(),
-                "&[]".to_string(),
-                bytes_literal(bytes),
-            ),
-            _ => (
-                "&[]".to_string(),
-                "&[]".to_string(),
-                "&[]".to_string(),
-                "&[]".to_string(),
-            ),
-        };
+fn render_qa_rs() -> String {
+    r#"use greentic_types::i18n_text::I18nText;
+use greentic_types::schemas::component::v0_6_0::{QaMode, Question, QuestionKind};
+use serde_json::{json, Value as JsonValue};
 
-    let template = r#"use std::collections::BTreeMap;
-
-use greentic_types::cbor::canonical;
-use greentic_types::i18n_text::I18nText;
-use greentic_types::schemas::component::v0_6_0::{ComponentQaSpec, QaMode, Question, QuestionKind};
-use serde_json::Value as JsonValue;
-
-const DEFAULT_PREFILLED_ANSWERS_CBOR: &[u8] = __DEFAULT_PREFILL__;
-const SETUP_PREFILLED_ANSWERS_CBOR: &[u8] = __SETUP_PREFILL__;
-const UPDATE_PREFILLED_ANSWERS_CBOR: &[u8] = __UPDATE_PREFILL__;
-const REMOVE_PREFILLED_ANSWERS_CBOR: &[u8] = __REMOVE_PREFILL__;
-
-#[derive(Debug, Clone, Copy)]
-pub enum Mode {
-    Default,
+// Internal normalized lifecycle semantics used by scaffolded QA operations.
+// Input compatibility accepts legacy/provision aliases via `normalize_mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalizedMode {
     Setup,
     Update,
     Remove,
 }
 
-pub fn qa_spec_cbor(mode: Mode) -> Vec<u8> {
-    let spec = qa_spec(mode);
-    canonical::to_canonical_cbor_allow_floats(&spec).unwrap_or_default()
+impl NormalizedMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Update => "update",
+            Self::Remove => "remove",
+        }
+    }
 }
 
-pub fn prefilled_answers_cbor(mode: Mode) -> &'static [u8] {
-    match mode {
-        Mode::Default => DEFAULT_PREFILLED_ANSWERS_CBOR,
-        Mode::Setup => SETUP_PREFILLED_ANSWERS_CBOR,
-        Mode::Update => UPDATE_PREFILLED_ANSWERS_CBOR,
-        Mode::Remove => REMOVE_PREFILLED_ANSWERS_CBOR,
+// Compatibility mapping for mode strings from operator/flow payloads.
+pub fn normalize_mode(raw: &str) -> Option<NormalizedMode> {
+    match raw {
+        "default" | "setup" | "install" => Some(NormalizedMode::Setup),
+        "update" | "upgrade" => Some(NormalizedMode::Update),
+        "remove" => Some(NormalizedMode::Remove),
+        _ => None,
     }
 }
 
-pub fn apply_answers(mode: Mode, current_config: Vec<u8>, answers: Vec<u8>) -> Vec<u8> {
-    let mut config = decode_map(&current_config);
-    let updates = decode_map(&answers);
-    match mode {
-        Mode::Default | Mode::Setup | Mode::Update => {
-            for (key, value) in updates {
-                config.insert(key, value);
-            }
-            config
-                .entry("enabled".to_string())
-                .or_insert(JsonValue::Bool(true));
-        }
-        Mode::Remove => {
-            config.clear();
-            config.insert("enabled".to_string(), JsonValue::Bool(false));
-        }
-    }
-    canonical::to_canonical_cbor_allow_floats(&config).unwrap_or_default()
-}
-
-fn qa_spec(mode: Mode) -> ComponentQaSpec {
+// Primary QA authoring entrypoint.
+// Extend question sets here for your real setup/update/remove requirements.
+pub fn qa_spec_json(mode: NormalizedMode) -> JsonValue {
     let (title_key, description_key, questions) = match mode {
-        Mode::Default => (
-            "qa.default.title",
-            Some("qa.default.description"),
-            vec![question_enabled("qa.default.enabled.label", "qa.default.enabled.help")],
+        NormalizedMode::Setup => (
+            "qa.install.title",
+            Some("qa.install.description"),
+            vec![
+                question("api_key", "qa.field.api_key.label", "qa.field.api_key.help", true),
+                question("region", "qa.field.region.label", "qa.field.region.help", true),
+                question(
+                    "webhook_base_url",
+                    "qa.field.webhook_base_url.label",
+                    "qa.field.webhook_base_url.help",
+                    true,
+                ),
+                question("enabled", "qa.field.enabled.label", "qa.field.enabled.help", false),
+            ],
         ),
-        Mode::Setup => (
-            "qa.setup.title",
-            Some("qa.setup.description"),
-            vec![question_enabled("qa.setup.enabled.label", "qa.setup.enabled.help")],
+        NormalizedMode::Update => (
+            "qa.update.title",
+            Some("qa.update.description"),
+            vec![
+                question("api_key", "qa.field.api_key.label", "qa.field.api_key.help", false),
+                question("region", "qa.field.region.label", "qa.field.region.help", false),
+                question(
+                    "webhook_base_url",
+                    "qa.field.webhook_base_url.label",
+                    "qa.field.webhook_base_url.help",
+                    false,
+                ),
+                question("enabled", "qa.field.enabled.label", "qa.field.enabled.help", false),
+            ],
         ),
-        Mode::Update => ("qa.update.title", None, Vec::new()),
-        Mode::Remove => ("qa.remove.title", None, Vec::new()),
+        NormalizedMode::Remove => (
+            "qa.remove.title",
+            Some("qa.remove.description"),
+            vec![question(
+                "confirm_remove",
+                "qa.field.confirm_remove.label",
+                "qa.field.confirm_remove.help",
+                true,
+            )],
+        ),
     };
-    ComponentQaSpec {
-        mode: match mode {
-            Mode::Default => QaMode::Default,
-            Mode::Setup => QaMode::Setup,
-            Mode::Update => QaMode::Update,
-            Mode::Remove => QaMode::Remove,
+
+    json!({
+        "mode": match mode {
+            NormalizedMode::Setup => QaMode::Setup,
+            NormalizedMode::Update => QaMode::Update,
+            NormalizedMode::Remove => QaMode::Remove,
         },
-        title: I18nText::new(title_key, None),
-        description: description_key.map(|key| I18nText::new(key, None)),
-        questions,
-        defaults: BTreeMap::new(),
-    }
+        "title": I18nText::new(title_key, None),
+        "description": description_key.map(|key| I18nText::new(key, None)),
+        "questions": questions,
+        "defaults": {}
+    })
 }
 
-fn question_enabled(label_key: &str, help_key: &str) -> Question {
+fn question(id: &str, label_key: &str, help_key: &str, required: bool) -> Question {
     Question {
-        id: "enabled".to_string(),
+        id: id.to_string(),
         label: I18nText::new(label_key, None),
         help: Some(I18nText::new(help_key, None)),
         error: None,
-        kind: QuestionKind::Bool,
-        required: true,
+        kind: QuestionKind::Text,
+        required,
         default: None,
     }
 }
 
-fn decode_map(bytes: &[u8]) -> BTreeMap<String, JsonValue> {
-    if bytes.is_empty() {
-        return BTreeMap::new();
-    }
-    let value: JsonValue = match canonical::from_cbor(bytes) {
-        Ok(value) => value,
-        Err(_) => return BTreeMap::new(),
-    };
-    let JsonValue::Object(map) = value else {
-        return BTreeMap::new();
-    };
-    map.into_iter().collect()
-}
-"#;
-    template
-        .replace("__DEFAULT_PREFILL__", &default_prefill)
-        .replace("__SETUP_PREFILL__", &setup_prefill)
-        .replace("__UPDATE_PREFILL__", &update_prefill)
-        .replace("__REMOVE_PREFILL__", &remove_prefill)
+// Used by `i18n-keys` operation and contract checks in operator.
+pub fn i18n_keys() -> Vec<String> {
+    crate::i18n::all_keys()
 }
 
+// Apply answers and return operator-friendly base shape:
+// { ok, config?, warnings, errors, ...optional metadata }
+// Extend this method for domain validation rules and config patching.
+pub fn apply_answers(mode: NormalizedMode, payload: &JsonValue) -> JsonValue {
+    let answers = payload.get("answers").cloned().unwrap_or_else(|| json!({}));
+    let current_config = payload
+        .get("current_config")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let mut errors = Vec::new();
+    match mode {
+        NormalizedMode::Setup => {
+            for key in ["api_key", "region", "webhook_base_url"] {
+                if answers.get(key).and_then(|v| v.as_str()).is_none() {
+                    errors.push(json!({
+                        "key": "qa.error.required",
+                        "msg_key": "qa.error.required",
+                        "fields": [key]
+                    }));
+                }
+            }
+        }
+        NormalizedMode::Remove => {
+            if answers
+                .get("confirm_remove")
+                .and_then(|v| v.as_str())
+                .map(|v| v != "true")
+                .unwrap_or(true)
+            {
+                errors.push(json!({
+                    "key": "qa.error.remove_confirmation",
+                    "msg_key": "qa.error.remove_confirmation",
+                    "fields": ["confirm_remove"]
+                }));
+            }
+        }
+        NormalizedMode::Update => {}
+    }
+
+    if !errors.is_empty() {
+        return json!({
+            "ok": false,
+            "warnings": [],
+            "errors": errors,
+            "meta": {
+                "mode": mode.as_str(),
+                "version": "v1"
+            }
+        });
+    }
+
+    let mut config = match current_config {
+        JsonValue::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    if let JsonValue::Object(map) = answers {
+        for (key, value) in map {
+            config.insert(key, value);
+        }
+    }
+    if mode == NormalizedMode::Remove {
+        config.insert("enabled".to_string(), JsonValue::Bool(false));
+    }
+
+    json!({
+        "ok": true,
+        "config": config,
+        "warnings": [],
+        "errors": [],
+        "meta": {
+            "mode": mode.as_str(),
+            "version": "v1"
+        },
+        "audit": {
+            "reasons": ["qa.apply_answers"],
+            "timings_ms": {}
+        }
+    })
+}
+"#
+    .to_string()
+}
+
+#[allow(dead_code)]
 fn render_descriptor_rs(context: &WizardContext) -> String {
-    let required_capabilities = render_capability_list(&context.required_capabilities);
-    let provided_capabilities = render_capability_list(&context.provided_capabilities);
-    let template = r#"use std::collections::BTreeMap;
-
-use greentic_types::cbor::canonical;
-use greentic_types::schemas::component::v0_6_0::{
-    ComponentDescribe, ComponentInfo, ComponentOperation, ComponentRunInput, ComponentRunOutput,
-    RedactionRule, RedactionKind, schema_hash,
-};
-
-use crate::schema;
-
-pub fn info() -> ComponentInfo {
-    ComponentInfo {
-        id: "com.example.__NAME__".to_string(),
-        version: "0.1.0".to_string(),
-        role: "__COMPONENT_ROLE__".to_string(),
-        display_name: None,
-    }
+    let _ = context;
+    String::new()
 }
 
-pub fn info_cbor() -> Vec<u8> {
-    canonical::to_canonical_cbor_allow_floats(&info()).unwrap_or_default()
-}
-
-pub fn describe() -> ComponentDescribe {
-    let input_schema = schema::input_schema();
-    let output_schema = schema::output_schema();
-    let config_schema = schema::config_schema();
-    let op_hash = schema_hash(&input_schema, &output_schema, &config_schema)
-        .expect("schema hash");
-    let operation = ComponentOperation {
-        id: "run".to_string(),
-        display_name: None,
-        input: ComponentRunInput { schema: input_schema },
-        output: ComponentRunOutput { schema: output_schema },
-        defaults: BTreeMap::new(),
-        redactions: vec![RedactionRule {
-            json_pointer: "/secret".to_string(),
-            kind: RedactionKind::Secret,
-        }],
-        constraints: BTreeMap::new(),
-        schema_hash: op_hash,
-    };
-    ComponentDescribe {
-        info: info(),
-        provided_capabilities: provided_capabilities(),
-        required_capabilities: required_capabilities(),
-        metadata: BTreeMap::new(),
-        operations: vec![operation],
-        config_schema,
-    }
-}
-
-fn required_capabilities() -> Vec<String> {
-    const REQUIRED_CAPABILITIES: &[&str] = __REQUIRED_CAPABILITIES__;
-    REQUIRED_CAPABILITIES
-        .iter()
-        .map(|capability| (*capability).to_string())
-        .collect()
-}
-
-fn provided_capabilities() -> Vec<String> {
-    const PROVIDED_CAPABILITIES: &[&str] = __PROVIDED_CAPABILITIES__;
-    PROVIDED_CAPABILITIES
-        .iter()
-        .map(|capability| (*capability).to_string())
-        .collect()
-}
-
-pub fn describe_cbor() -> Vec<u8> {
-    canonical::to_canonical_cbor_allow_floats(&describe()).unwrap_or_default()
-}
-"#;
-    template
-        .replace("__NAME__", &context.name)
-        .replace("__COMPONENT_ROLE__", &context.component_kind)
-        .replace("__REQUIRED_CAPABILITIES__", &required_capabilities)
-        .replace("__PROVIDED_CAPABILITIES__", &provided_capabilities)
-}
-
+#[allow(dead_code)]
 fn render_capability_list(capabilities: &[String]) -> String {
-    if capabilities.is_empty() {
-        return "&[]".to_string();
-    }
-    let values = capabilities
-        .iter()
-        .map(|capability| serde_json::to_string(capability).unwrap_or_else(|_| "\"\"".to_string()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("&[{values}]")
+    let _ = capabilities;
+    "&[]".to_string()
 }
 
+#[allow(dead_code)]
 fn render_schema_rs() -> String {
     r#"use std::collections::BTreeMap;
 
@@ -1159,6 +1338,7 @@ fn object_schema(props: Vec<(&str, SchemaIr)>) -> SchemaIr {
     .to_string()
 }
 
+#[allow(dead_code)]
 fn render_runtime_rs() -> String {
     r#"use std::collections::BTreeMap;
 
@@ -1214,21 +1394,57 @@ fn decode_map(bytes: &[u8]) -> BTreeMap<String, JsonValue> {
 }
 
 fn render_i18n_rs() -> String {
-    r#"pub const I18N_KEYS: &[&str] = &[
-    "qa.default.title",
-    "qa.default.description",
-    "qa.default.enabled.label",
-    "qa.default.enabled.help",
-    "qa.setup.title",
-    "qa.setup.description",
-    "qa.setup.enabled.label",
-    "qa.setup.enabled.help",
-    "qa.update.title",
-    "qa.remove.title",
-];
+    r#"use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
+use crate::i18n_bundle::{unpack_locales_from_cbor, LocaleBundle};
+
+// Generated by build.rs: static embedded CBOR translation bundle.
+include!(concat!(env!("OUT_DIR"), "/i18n_bundle.rs"));
+
+// Decode once for process lifetime.
+static I18N_BUNDLE: OnceLock<LocaleBundle> = OnceLock::new();
+
+fn bundle() -> &'static LocaleBundle {
+    I18N_BUNDLE.get_or_init(|| unpack_locales_from_cbor(I18N_BUNDLE_CBOR).unwrap_or_default())
+}
+
+// Fallback precedence is deterministic:
+// exact locale -> base language -> en
+fn locale_chain(locale: &str) -> Vec<String> {
+    let normalized = locale.replace('_', "-");
+    let mut chain = vec![normalized.clone()];
+    if let Some((base, _)) = normalized.split_once('-') {
+        chain.push(base.to_string());
+    }
+    chain.push("en".to_string());
+    chain
+}
+
+// Translation lookup function used throughout generated QA/setup code.
+// Extend by adding pluralization/context handling if your component needs it.
+pub fn t(locale: &str, key: &str) -> String {
+    for candidate in locale_chain(locale) {
+        if let Some(map) = bundle().get(&candidate)
+            && let Some(value) = map.get(key)
+        {
+            return value.clone();
+        }
+    }
+    key.to_string()
+}
+
+// Returns canonical source key list (from `en`).
 pub fn all_keys() -> Vec<String> {
-    I18N_KEYS.iter().map(|key| (*key).to_string()).collect()
+    let Some(en) = bundle().get("en") else {
+        return Vec::new();
+    };
+    en.keys().cloned().collect()
+}
+
+// Returns English dictionary for diagnostics/tests/tools.
+pub fn en_messages() -> BTreeMap<String, String> {
+    bundle().get("en").cloned().unwrap_or_default()
 }
 "#
     .to_string()
@@ -1236,21 +1452,280 @@ pub fn all_keys() -> Vec<String> {
 
 fn render_i18n_bundle() -> String {
     r#"{
-  "qa.default.title": "Default configuration",
-  "qa.default.description": "Review default settings for this component.",
-  "qa.default.enabled.label": "Enable the component",
-  "qa.default.enabled.help": "Toggle whether the component should run.",
-  "qa.setup.title": "Initial setup",
-  "qa.setup.description": "Provide initial configuration values.",
-  "qa.setup.enabled.label": "Enable on setup",
-  "qa.setup.enabled.help": "Enable the component after setup completes.",
+  "qa.install.title": "Install configuration",
+  "qa.install.description": "Provide values for initial provider setup.",
   "qa.update.title": "Update configuration",
-  "qa.remove.title": "Removal settings"
+  "qa.update.description": "Adjust existing provider settings.",
+  "qa.remove.title": "Remove configuration",
+  "qa.remove.description": "Confirm provider removal settings.",
+  "qa.field.api_key.label": "API key",
+  "qa.field.api_key.help": "Secret key used to authenticate provider requests.",
+  "qa.field.region.label": "Region",
+  "qa.field.region.help": "Region identifier for the provider account.",
+  "qa.field.webhook_base_url.label": "Webhook base URL",
+  "qa.field.webhook_base_url.help": "Public base URL used for webhook callbacks.",
+  "qa.field.enabled.label": "Enable provider",
+  "qa.field.enabled.help": "Enable this provider after setup completes.",
+  "qa.field.confirm_remove.label": "Confirm removal",
+  "qa.field.confirm_remove.help": "Set to true to allow provider removal.",
+  "qa.error.required": "One or more required fields are missing.",
+  "qa.error.remove_confirmation": "Removal requires explicit confirmation."
 }
 "#
     .to_string()
 }
 
+fn render_i18n_locales_json() -> String {
+    r#"["ar","ar-AE","ar-DZ","ar-EG","ar-IQ","ar-MA","ar-SA","ar-SD","ar-SY","ar-TN","ay","bg","bn","cs","da","de","el","en-GB","es","et","fa","fi","fr","fr-FR","gn","gu","hi","hr","ht","hu","id","it","ja","km","kn","ko","lo","lt","lv","ml","mr","ms","my","nah","ne","nl","nl-NL","no","pa","pl","pt","qu","ro","ru","si","sk","sr","sv","ta","te","th","tl","tr","uk","ur","vi","zh"]
+"#
+    .to_string()
+}
+
+fn render_i18n_bundle_rs() -> String {
+    r#"use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use greentic_types::cbor::canonical;
+
+// Locale -> (key -> translated message)
+pub type LocaleBundle = BTreeMap<String, BTreeMap<String, String>>;
+
+// Reads `assets/i18n/*.json` locale maps and returns stable BTreeMap ordering.
+// Extend here if you need stricter file validation rules.
+pub fn load_locale_files(dir: &Path) -> Result<LocaleBundle, String> {
+    let mut locales = LocaleBundle::new();
+    if !dir.exists() {
+        return Ok(locales);
+    }
+    for entry in fs::read_dir(dir).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        // locales.json is metadata, not a translation dictionary.
+        if stem == "locales" {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+        let map: BTreeMap<String, String> = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
+        locales.insert(stem.to_string(), map);
+    }
+    Ok(locales)
+}
+
+pub fn pack_locales_to_cbor(locales: &LocaleBundle) -> Result<Vec<u8>, String> {
+    canonical::to_canonical_cbor_allow_floats(locales).map_err(|err| err.to_string())
+}
+
+#[allow(dead_code)]
+// Runtime decode helper used by src/i18n.rs.
+pub fn unpack_locales_from_cbor(bytes: &[u8]) -> Result<LocaleBundle, String> {
+    canonical::from_cbor(bytes).map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pack_roundtrip_contains_en() {
+        let mut locales = LocaleBundle::new();
+        let mut en = BTreeMap::new();
+        en.insert("qa.install.title".to_string(), "Install".to_string());
+        locales.insert("en".to_string(), en);
+
+        let cbor = pack_locales_to_cbor(&locales).expect("pack locales");
+        let decoded = unpack_locales_from_cbor(&cbor).expect("decode locales");
+        assert!(decoded.contains_key("en"));
+    }
+}
+"#
+    .to_string()
+}
+
+fn render_build_rs() -> String {
+    r#"#[path = "src/i18n_bundle.rs"]
+mod i18n_bundle;
+
+use std::env;
+use std::fs;
+use std::path::Path;
+
+// Build-time embedding pipeline:
+// 1) Read assets/i18n/*.json
+// 2) Pack canonical CBOR bundle
+// 3) Emit OUT_DIR constants included by src/i18n.rs
+fn main() {
+    let i18n_dir = Path::new("assets/i18n");
+    println!("cargo:rerun-if-changed={}", i18n_dir.display());
+
+    let locales = i18n_bundle::load_locale_files(i18n_dir)
+        .unwrap_or_else(|err| panic!("failed to load locale files: {err}"));
+    let bundle = i18n_bundle::pack_locales_to_cbor(&locales)
+        .unwrap_or_else(|err| panic!("failed to pack locale bundle: {err}"));
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR must be set by cargo");
+    let bundle_path = Path::new(&out_dir).join("i18n.bundle.cbor");
+    fs::write(&bundle_path, bundle).expect("write i18n.bundle.cbor");
+
+    let rs_path = Path::new(&out_dir).join("i18n_bundle.rs");
+    fs::write(
+        &rs_path,
+        "pub const I18N_BUNDLE_CBOR: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/i18n.bundle.cbor\"));\n",
+    )
+    .expect("write i18n_bundle.rs");
+}
+"#
+    .to_string()
+}
+
+fn render_i18n_sh() -> String {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCALES_FILE="$ROOT_DIR/assets/i18n/locales.json"
+SOURCE_FILE="$ROOT_DIR/assets/i18n/en.json"
+
+log() {
+  printf '[i18n] %s\n' "$*"
+}
+
+fail() {
+  printf '[i18n] error: %s\n' "$*" >&2
+  exit 1
+}
+
+ensure_codex() {
+  if command -v codex >/dev/null 2>&1; then
+    return
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    log "installing Codex CLI via npm"
+    npm i -g @openai/codex || fail "failed to install Codex CLI via npm"
+  elif command -v brew >/dev/null 2>&1; then
+    log "installing Codex CLI via brew"
+    brew install codex || fail "failed to install Codex CLI via brew"
+  else
+    fail "Codex CLI not found and no supported installer available (npm or brew)"
+  fi
+}
+
+ensure_codex_login() {
+  if codex login status >/dev/null 2>&1; then
+    return
+  fi
+  log "Codex login status unavailable or not logged in; starting login flow"
+  codex login || fail "Codex login failed"
+}
+
+probe_translator() {
+  command -v greentic-i18n-translator >/dev/null 2>&1 || fail "greentic-i18n-translator not found. Install it and rerun this script."
+  local help_output
+  help_output="$(greentic-i18n-translator --help 2>&1 || true)"
+  [[ -n "$help_output" ]] || fail "unable to inspect greentic-i18n-translator --help"
+  if ! greentic-i18n-translator translate --help >/dev/null 2>&1; then
+    fail "translator subcommand 'translate' is required but unavailable"
+  fi
+}
+
+run_translate() {
+  while IFS= read -r locale; do
+    [[ -n "$locale" ]] || continue
+    log "translating locale: $locale"
+    greentic-i18n-translator translate \
+      --langs "$locale" \
+      --en "$SOURCE_FILE" || fail "translate failed for locale $locale"
+  done < <(python3 - "$LOCALES_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+for locale in data:
+    if locale != "en":
+        print(locale)
+PY
+)
+}
+
+run_validate_per_locale() {
+  local failed=0
+  while IFS= read -r locale; do
+    [[ -n "$locale" ]] || continue
+    if ! greentic-i18n-translator validate --langs "$locale" --en "$SOURCE_FILE"; then
+      log "validate failed for locale: $locale"
+      failed=1
+    fi
+  done < <(python3 - "$LOCALES_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+for locale in data:
+    if locale != "en":
+        print(locale)
+PY
+)
+  return "$failed"
+}
+
+run_status_per_locale() {
+  local failed=0
+  while IFS= read -r locale; do
+    [[ -n "$locale" ]] || continue
+    if ! greentic-i18n-translator status --langs "$locale" --en "$SOURCE_FILE"; then
+      log "status failed for locale: $locale"
+      failed=1
+    fi
+  done < <(python3 - "$LOCALES_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+for locale in data:
+    if locale != "en":
+        print(locale)
+PY
+)
+  return "$failed"
+}
+
+run_optional_checks() {
+  if greentic-i18n-translator validate --help >/dev/null 2>&1; then
+    log "running translator validate"
+    if ! run_validate_per_locale; then
+      fail "translator validate failed"
+    fi
+  else
+    log "warning: translator validate command not available; skipping"
+  fi
+  if greentic-i18n-translator status --help >/dev/null 2>&1; then
+    log "running translator status"
+    run_status_per_locale || fail "translator status failed"
+  else
+    log "warning: translator status command not available; skipping"
+  fi
+}
+
+[[ -f "$LOCALES_FILE" ]] || fail "missing locales file: $LOCALES_FILE"
+[[ -f "$SOURCE_FILE" ]] || fail "missing source locale file: $SOURCE_FILE"
+
+ensure_codex
+ensure_codex_login
+probe_translator
+run_translate
+run_optional_checks
+log "translations updated. Run cargo build to embed translations into WASM"
+"#
+    .to_string()
+}
+
+#[allow(dead_code)]
 fn bytes_literal(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return "&[]".to_string();

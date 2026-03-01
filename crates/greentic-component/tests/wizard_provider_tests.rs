@@ -135,6 +135,17 @@ fn execute_plan_writes_expected_files() {
     assert!(target.join("src/lib.rs").exists());
     assert!(target.join("src/qa.rs").exists());
     assert!(target.join("assets/i18n/en.json").exists());
+    assert!(target.join("assets/i18n/locales.json").exists());
+    assert!(target.join("tools/i18n.sh").exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(target.join("tools/i18n.sh"))
+            .expect("i18n.sh metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "tools/i18n.sh should be executable");
+    }
 
     let cargo = std::fs::read_to_string(target.join("Cargo.toml")).expect("cargo.toml");
     assert!(cargo.contains("name = \"exec-demo\""));
