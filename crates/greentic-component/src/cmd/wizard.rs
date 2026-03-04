@@ -112,6 +112,7 @@ pub struct WizardArgs {
 pub enum RunMode {
     Create,
     #[value(alias = "build_test")]
+    #[serde(alias = "build-test")]
     BuildTest,
     Doctor,
 }
@@ -231,19 +232,24 @@ fn run_with_context(
     apply_legacy_wizard_new_compat(legacy_new, &mut args, &mut answers)?;
 
     if answers.is_none() && io::stdin().is_terminal() && io::stdout().is_terminal() {
+        args.mode = prompt_main_menu_mode(args.mode)?;
         answers = Some(collect_interactive_answers(&args)?);
     }
 
     if let Some(doc) = &answers
         && doc.mode != args.mode
     {
-        bail!(
-            "{}",
-            trf(
-                "cli.wizard.result.answers_mode_mismatch",
-                &[&format!("{:?}", doc.mode), &format!("{:?}", args.mode)],
-            )
-        );
+        if args.mode == RunMode::Create {
+            args.mode = doc.mode;
+        } else {
+            bail!(
+                "{}",
+                trf(
+                    "cli.wizard.result.answers_mode_mismatch",
+                    &[&format!("{:?}", doc.mode), &format!("{:?}", args.mode)],
+                )
+            );
+        }
     }
 
     let output = build_run_output(&args, execution, answers.as_ref())?;
@@ -1144,6 +1150,49 @@ fn prompt_yes_no(prompt: String, default_yes: bool) -> Result<bool> {
     }
 }
 
+fn prompt_main_menu_mode(default: RunMode) -> Result<RunMode> {
+    println!("{}", tr("cli.wizard.result.interactive_header"));
+    println!("1) {}", tr("cli.wizard.menu.create_new_component"));
+    println!("2) {}", tr("cli.wizard.menu.build_and_test_component"));
+    println!("3) {}", tr("cli.wizard.menu.doctor_component"));
+    let default_label = match default {
+        RunMode::Create => "1",
+        RunMode::BuildTest => "2",
+        RunMode::Doctor => "3",
+    };
+    loop {
+        print!(
+            "{} ",
+            trf("cli.wizard.prompt.select_option", &[default_label])
+        );
+        io::stdout().flush()?;
+        let mut line = String::new();
+        let read = io::stdin().read_line(&mut line)?;
+        if read == 0 {
+            bail!("stdin closed");
+        }
+        let token = line.trim().to_ascii_lowercase();
+        let selected = if token.is_empty() {
+            default_label.to_string()
+        } else {
+            token
+        };
+        if let Some(mode) = parse_main_menu_selection(&selected) {
+            return Ok(mode);
+        }
+        println!("{}", tr("cli.wizard.result.qa_value_required"));
+    }
+}
+
+fn parse_main_menu_selection(value: &str) -> Option<RunMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "create" => Some(RunMode::Create),
+        "2" | "build" | "build-test" | "build_test" => Some(RunMode::BuildTest),
+        "3" | "doctor" => Some(RunMode::Doctor),
+        _ => None,
+    }
+}
+
 fn fallback_default_for_question(
     args: &WizardArgs,
     question_id: &str,
@@ -1330,4 +1379,37 @@ fn trf(key: &str, args: &[&str]) -> String {
         msg = msg.replacen("{}", arg, 1);
     }
     msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RunMode, parse_main_menu_selection};
+
+    #[test]
+    fn parse_main_menu_selection_supports_numeric_options() {
+        assert_eq!(parse_main_menu_selection("1"), Some(RunMode::Create));
+        assert_eq!(parse_main_menu_selection("2"), Some(RunMode::BuildTest));
+        assert_eq!(parse_main_menu_selection("3"), Some(RunMode::Doctor));
+    }
+
+    #[test]
+    fn parse_main_menu_selection_supports_mode_aliases() {
+        assert_eq!(parse_main_menu_selection("create"), Some(RunMode::Create));
+        assert_eq!(
+            parse_main_menu_selection("build_test"),
+            Some(RunMode::BuildTest)
+        );
+        assert_eq!(
+            parse_main_menu_selection("build-test"),
+            Some(RunMode::BuildTest)
+        );
+        assert_eq!(parse_main_menu_selection("doctor"), Some(RunMode::Doctor));
+    }
+
+    #[test]
+    fn parse_main_menu_selection_rejects_unknown_values() {
+        assert_eq!(parse_main_menu_selection(""), None);
+        assert_eq!(parse_main_menu_selection("4"), None);
+        assert_eq!(parse_main_menu_selection("unknown"), None);
+    }
 }

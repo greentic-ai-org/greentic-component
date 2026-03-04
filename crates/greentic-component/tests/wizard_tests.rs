@@ -19,6 +19,30 @@ fn create_answers(path: &std::path::Path, name: &str) {
     fs::write(path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
 }
 
+fn create_answers_with_mode(path: &std::path::Path, mode: &str) {
+    let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let fields = match mode {
+        "build-test" => serde_json::json!({
+            "project_root": root,
+            "full_tests": false
+        }),
+        "doctor" => serde_json::json!({
+            "project_root": root
+        }),
+        _ => serde_json::json!({
+            "component_name": "component",
+            "output_dir": root.join("component"),
+            "abi_version": "0.6.0"
+        }),
+    };
+    let payload = serde_json::json!({
+        "schema": "component-wizard-run/v1",
+        "mode": mode,
+        "fields": fields
+    });
+    fs::write(path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
+}
+
 fn create_answer_document(path: &std::path::Path, name: &str, schema_version: &str) {
     let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     let payload = serde_json::json!({
@@ -392,4 +416,228 @@ fn wizard_apply_command_alias_with_migrate_executes_side_effects() {
     })
     .expect("wizard apply alias should execute scaffold");
     assert!(temp.path().join("apply-doc-component/Cargo.toml").exists());
+}
+
+#[test]
+fn wizard_replay_answers_mode_build_test_overrides_default_create_mode() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let answers_path = temp.path().join("answers.build-test.json");
+    let plan_out = temp.path().join("plan.json");
+    create_answers_with_mode(&answers_path, "build-test");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::DryRun,
+        dry_run: false,
+        validate: false,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_path),
+        qa_answers_out: None,
+        emit_answers: None,
+        schema_version: None,
+        migrate: false,
+        plan_out: Some(plan_out.clone()),
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+
+    run(args).expect("wizard replay should adopt build-test mode from answers");
+    let plan: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(plan_out).expect("plan should exist"))
+            .expect("plan JSON");
+    assert_eq!(
+        plan.pointer("/plan/meta/id")
+            .and_then(serde_json::Value::as_str),
+        Some("greentic.component.build_test")
+    );
+}
+
+#[test]
+fn wizard_replay_answers_mode_doctor_overrides_default_create_mode() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let answers_path = temp.path().join("answers.doctor.json");
+    let plan_out = temp.path().join("plan.json");
+    create_answers_with_mode(&answers_path, "doctor");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::DryRun,
+        dry_run: false,
+        validate: false,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_path),
+        qa_answers_out: None,
+        emit_answers: None,
+        schema_version: None,
+        migrate: false,
+        plan_out: Some(plan_out.clone()),
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+
+    run(args).expect("wizard replay should adopt doctor mode from answers");
+    let plan: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(plan_out).expect("plan should exist"))
+            .expect("plan JSON");
+    assert_eq!(
+        plan.pointer("/plan/meta/id")
+            .and_then(serde_json::Value::as_str),
+        Some("greentic.component.doctor")
+    );
+}
+
+#[test]
+fn wizard_emit_answers_preserves_replayed_mode() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let answers_path = temp.path().join("answers.build-test.json");
+    let answers_out = temp.path().join("answers.out.json");
+    create_answers_with_mode(&answers_path, "build-test");
+
+    let args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::DryRun,
+        dry_run: false,
+        validate: false,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_path),
+        qa_answers_out: None,
+        emit_answers: Some(answers_out.clone()),
+        schema_version: None,
+        migrate: false,
+        plan_out: Some(temp.path().join("plan.json")),
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+
+    run(args).expect("wizard replay should emit answers");
+    let out: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(answers_out).expect("answers out")).unwrap();
+    assert_eq!(
+        out.pointer("/answers/mode")
+            .and_then(serde_json::Value::as_str),
+        Some("build-test")
+    );
+}
+
+#[test]
+fn wizard_full_chain_dry_run_emit_validate_replay_execute() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let answers_in = temp.path().join("answers.in.json");
+    let plan_out = temp.path().join("plan.validate.json");
+    let answers_out = temp.path().join("answers.out.json");
+    let replay_plan = temp.path().join("plan.replay.json");
+    let component_name = "full-chain-component";
+    let component_root = temp.path().join(component_name);
+    create_answers(&answers_in, component_name);
+
+    let validate_args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::Execute,
+        dry_run: false,
+        validate: true,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_in),
+        qa_answers_out: None,
+        emit_answers: Some(answers_out.clone()),
+        schema_version: None,
+        migrate: false,
+        plan_out: Some(plan_out.clone()),
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+
+    run(validate_args).expect("validate pass should succeed");
+    assert!(plan_out.exists(), "validate should emit a plan file");
+    assert!(
+        answers_out.exists(),
+        "validate should emit an answers document"
+    );
+    assert!(
+        !component_root.exists(),
+        "validate/dry-run path should not create scaffold files"
+    );
+
+    let emitted: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&answers_out).expect("answers out")).unwrap();
+    assert_eq!(
+        emitted
+            .pointer("/schema_id")
+            .and_then(serde_json::Value::as_str),
+        Some("greentic-component.wizard.run")
+    );
+    assert_eq!(
+        emitted
+            .pointer("/answers/mode")
+            .and_then(serde_json::Value::as_str),
+        Some("create")
+    );
+    assert_eq!(
+        emitted
+            .pointer("/answers/fields/component_name")
+            .and_then(serde_json::Value::as_str),
+        Some(component_name)
+    );
+
+    let replay_validate_args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::Execute,
+        dry_run: false,
+        validate: true,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_out.clone()),
+        qa_answers_out: None,
+        emit_answers: None,
+        schema_version: None,
+        migrate: false,
+        plan_out: Some(replay_plan.clone()),
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+    run(replay_validate_args).expect("replay validate should succeed");
+    assert!(
+        replay_plan.exists(),
+        "replay validate should emit a second plan"
+    );
+
+    let execute_args = WizardArgs {
+        mode: RunMode::Create,
+        execution: ExecutionMode::Execute,
+        dry_run: false,
+        validate: false,
+        apply: false,
+        qa_answers: None,
+        answers: Some(answers_out),
+        qa_answers_out: None,
+        emit_answers: None,
+        schema_version: None,
+        migrate: false,
+        plan_out: None,
+        project_root: temp.path().to_path_buf(),
+        template: None,
+        full_tests: false,
+        json: false,
+    };
+    run(execute_args).expect("execute from emitted answers should succeed");
+
+    assert!(component_root.join("Cargo.toml").exists());
+    assert!(component_root.join("component.manifest.json").exists());
+    assert!(component_root.join("src/lib.rs").exists());
+    let cargo_toml = fs::read_to_string(component_root.join("Cargo.toml")).unwrap();
+    assert!(cargo_toml.contains("name = \"full-chain-component\""));
+    assert!(cargo_toml.contains("abi_version = \"0.6.0\""));
 }

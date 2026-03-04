@@ -1749,4 +1749,3 @@ mod tests {
         assert!(!cbor.is_empty());
     }
 }
-
