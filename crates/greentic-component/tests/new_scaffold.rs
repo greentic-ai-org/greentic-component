@@ -48,15 +48,6 @@ fn scaffold_rust_wasi_template() {
     let locales_json =
         fs::read_to_string(component_dir.join("assets/i18n/locales.json")).expect("locales.json");
     let i18n_tool = component_dir.join("tools/i18n.sh");
-    let input_schema = fs::read_to_string(
-        component_dir
-            .join("schemas")
-            .join("io")
-            .join("input.schema.json"),
-    )
-    .expect("input schema");
-    let input_schema_json: JsonValue =
-        serde_json::from_str(&input_schema).expect("input schema json");
     let manifest_json: JsonValue = serde_json::from_str(&manifest).expect("manifest json");
     let operations = manifest_json["operations"]
         .as_array()
@@ -121,7 +112,7 @@ fn scaffold_rust_wasi_template() {
     assert_snapshot!("scaffold_manifest", normalize_text(manifest.trim()));
     assert_snapshot!("scaffold_lib", normalize_text(lib_rs.trim()));
     assert_eq!(
-        input_schema_json["properties"]["input"]["default"]
+        first_op["input_schema"]["properties"]["input"]["default"]
             .as_str()
             .expect("input default"),
         "Hello from demo-component!"
@@ -363,4 +354,179 @@ REAL_CARGO="$(command -v cargo)"
             .or(predicates::str::contains("unable to resolve wasm"))
             .or(predicates::str::contains("failed to load component")),
     );
+}
+
+#[test]
+fn scaffold_new_accepts_custom_user_operations() {
+    let temp = TempDir::new().expect("temp dir");
+    let component_dir = temp.path().join("custom-ops-component");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+    cmd.arg("new")
+        .arg("--name")
+        .arg("custom-ops-component")
+        .arg("--org")
+        .arg("ai.greentic")
+        .arg("--path")
+        .arg(&component_dir)
+        .arg("--operation")
+        .arg("render,sync-state")
+        .arg("--default-operation")
+        .arg("sync-state")
+        .arg("--no-check")
+        .arg("--no-git")
+        .env("HOME", temp.path())
+        .env("GREENTIC_TEMPLATE_YEAR", "2030")
+        .env("GREENTIC_TEMPLATE_ROOT", temp.path().join("templates"))
+        .env("GREENTIC_DEP_MODE", "cratesio");
+    cmd.assert().success();
+
+    let manifest = fs::read_to_string(component_dir.join("component.manifest.json"))
+        .expect("custom ops manifest");
+    let manifest_json: JsonValue = serde_json::from_str(&manifest).expect("manifest json");
+    let operations = manifest_json["operations"]
+        .as_array()
+        .expect("operations array in scaffold");
+    let user_operation_names = operations
+        .iter()
+        .filter_map(|op| op["name"].as_str())
+        .filter(|name| !matches!(*name, "qa-spec" | "apply-answers" | "i18n-keys"))
+        .collect::<Vec<_>>();
+    assert_eq!(user_operation_names, vec!["render", "sync-state"]);
+    assert_eq!(
+        manifest_json["default_operation"].as_str(),
+        Some("sync-state")
+    );
+
+    let lib_rs = fs::read_to_string(component_dir.join("src/lib.rs")).expect("lib.rs");
+    assert!(lib_rs.contains("name: \"render\".to_string()"));
+    assert!(lib_rs.contains("name: \"sync-state\".to_string()"));
+}
+
+#[test]
+fn scaffold_new_writes_runtime_capability_fields() {
+    let temp = TempDir::new().expect("temp dir");
+    let component_dir = temp.path().join("runtime-capability-component");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+    cmd.arg("new")
+        .arg("--name")
+        .arg("runtime-capability-component")
+        .arg("--org")
+        .arg("ai.greentic")
+        .arg("--path")
+        .arg(&component_dir)
+        .arg("--filesystem-mode")
+        .arg("read_only")
+        .arg("--filesystem-mount")
+        .arg("assets:assets:/assets")
+        .arg("--http-client")
+        .arg("--state-read")
+        .arg("--telemetry-scope")
+        .arg("pack")
+        .arg("--telemetry-span-prefix")
+        .arg("component.runtime")
+        .arg("--telemetry-attribute")
+        .arg("component=runtime")
+        .arg("--secret-key")
+        .arg("API_TOKEN")
+        .arg("--secret-env")
+        .arg("prod")
+        .arg("--secret-tenant")
+        .arg("acme")
+        .arg("--secret-format")
+        .arg("text")
+        .arg("--no-check")
+        .arg("--no-git")
+        .env("HOME", temp.path())
+        .env("GREENTIC_TEMPLATE_YEAR", "2030")
+        .env("GREENTIC_TEMPLATE_ROOT", temp.path().join("templates"))
+        .env("GREENTIC_DEP_MODE", "cratesio");
+    cmd.assert().success();
+
+    let manifest = fs::read_to_string(component_dir.join("component.manifest.json")).unwrap();
+    assert!(manifest.contains("\"mode\": \"read_only\""));
+    assert!(manifest.contains("\"guest_path\": \"/assets\""));
+    assert!(manifest.contains("\"client\": true"));
+    assert!(manifest.contains("\"read\": true"));
+    assert!(manifest.contains("\"scope\": \"pack\""));
+    assert!(manifest.contains("\"span_prefix\": \"component.runtime\""));
+    assert!(manifest.contains("\"component\": \"runtime\""));
+    assert!(manifest.contains("\"key\": \"API_TOKEN\""));
+}
+
+#[test]
+fn scaffold_new_ignores_filesystem_mounts_when_mode_is_none() {
+    let temp = TempDir::new().expect("temp dir");
+    let component_dir = temp.path().join("no-fs-component");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+    cmd.arg("new")
+        .arg("--name")
+        .arg("no-fs-component")
+        .arg("--org")
+        .arg("ai.greentic")
+        .arg("--path")
+        .arg(&component_dir)
+        .arg("--filesystem-mode")
+        .arg("none")
+        .arg("--filesystem-mount")
+        .arg("assets:assets:/assets")
+        .arg("--no-check")
+        .arg("--no-git")
+        .env("HOME", temp.path())
+        .env("GREENTIC_TEMPLATE_YEAR", "2030")
+        .env("GREENTIC_TEMPLATE_ROOT", temp.path().join("templates"))
+        .env("GREENTIC_DEP_MODE", "cratesio");
+    cmd.assert().success();
+
+    let manifest = fs::read_to_string(component_dir.join("component.manifest.json")).unwrap();
+    let manifest_json: JsonValue = serde_json::from_str(&manifest).expect("manifest json");
+    assert_eq!(
+        manifest_json["capabilities"]["wasi"]["filesystem"]["mode"].as_str(),
+        Some("none")
+    );
+    assert_eq!(
+        manifest_json["capabilities"]["wasi"]["filesystem"]["mounts"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+}
+
+#[test]
+fn scaffold_new_writes_config_schema_fields() {
+    let temp = TempDir::new().expect("temp dir");
+    let component_dir = temp.path().join("config-component");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+    cmd.arg("new")
+        .arg("--name")
+        .arg("config-component")
+        .arg("--org")
+        .arg("ai.greentic")
+        .arg("--path")
+        .arg(&component_dir)
+        .arg("--config-field")
+        .arg("enabled:bool:required")
+        .arg("--config-field")
+        .arg("api_key:string")
+        .arg("--no-check")
+        .arg("--no-git")
+        .env("HOME", temp.path())
+        .env("GREENTIC_TEMPLATE_YEAR", "2030")
+        .env("GREENTIC_TEMPLATE_ROOT", temp.path().join("templates"))
+        .env("GREENTIC_DEP_MODE", "cratesio");
+    cmd.assert().success();
+
+    let manifest = fs::read_to_string(component_dir.join("component.manifest.json")).unwrap();
+    assert!(manifest.contains("\"enabled\""));
+    assert!(manifest.contains("\"boolean\""));
+    assert!(manifest.contains("\"api_key\""));
+
+    let lib_rs = fs::read_to_string(component_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("\"enabled\".to_string()"));
+    assert!(lib_rs.contains("SchemaIr::Bool"));
+    assert!(lib_rs.contains("\"api_key\".to_string()"));
+
+    let schema_file =
+        fs::read_to_string(component_dir.join("schemas/component.schema.json")).unwrap();
+    assert!(schema_file.contains("\"enabled\""));
+    assert!(schema_file.contains("\"api_key\""));
 }

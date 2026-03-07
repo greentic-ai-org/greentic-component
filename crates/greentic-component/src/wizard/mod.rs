@@ -12,6 +12,11 @@ use greentic_types::schemas::component::v0_6_0::{
 use serde::Serialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
+use serde_json::json;
+
+use crate::scaffold::config_schema::ConfigSchemaInput;
+use crate::scaffold::deps::{DependencyMode, DependencyTemplates, resolve_dependency_templates};
+use crate::scaffold::runtime_capabilities::RuntimeCapabilitiesInput;
 
 pub const PLAN_VERSION: u32 = 1;
 pub const TEMPLATE_VERSION: &str = "component-scaffold-v0.6.0";
@@ -40,6 +45,10 @@ pub struct WizardRequest {
     pub answers: Option<AnswersPayload>,
     pub required_capabilities: Vec<String>,
     pub provided_capabilities: Vec<String>,
+    pub user_operations: Vec<String>,
+    pub default_operation: Option<String>,
+    pub runtime_capabilities: RuntimeCapabilitiesInput,
+    pub config_schema: ConfigSchemaInput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,12 +188,30 @@ pub fn apply_scaffold(request: WizardRequest, dry_run: bool) -> Result<ApplyResu
         normalize_answers(request.answers, request.mode)?;
     let mut all_warnings = warnings;
     all_warnings.append(&mut mapping_warnings);
+    let user_operations = if request.user_operations.is_empty() {
+        vec!["handle_message".to_string()]
+    } else {
+        request.user_operations.clone()
+    };
+    let default_operation = request
+        .default_operation
+        .clone()
+        .or_else(|| user_operations.first().cloned())
+        .unwrap_or_else(|| "handle_message".to_string());
     let context = WizardContext {
         name: request.name,
         abi_version: request.abi_version.clone(),
         prefill_mode: request.mode,
         prefill_answers_cbor,
         prefill_answers_json,
+        user_operations,
+        default_operation,
+        runtime_capabilities: request.runtime_capabilities,
+        config_schema: request.config_schema,
+        dependency_templates: resolve_dependency_templates(
+            DependencyMode::from_env(),
+            &request.target,
+        ),
     };
 
     let files = build_files(&context)?;
@@ -283,6 +310,11 @@ struct WizardContext {
     prefill_mode: WizardMode,
     prefill_answers_cbor: Option<Vec<u8>>,
     prefill_answers_json: Option<String>,
+    user_operations: Vec<String>,
+    default_operation: String,
+    runtime_capabilities: RuntimeCapabilitiesInput,
+    config_schema: ConfigSchemaInput,
+    dependency_templates: DependencyTemplates,
 }
 
 type NormalizedAnswers = (Option<String>, Option<Vec<u8>>, Vec<String>);
@@ -361,6 +393,10 @@ fn build_files(context: &WizardContext) -> Result<Vec<GeneratedFile>> {
         text_file("rust-toolchain.toml", render_rust_toolchain_toml()),
         text_file("README.md", render_readme(context)),
         text_file("component.manifest.json", render_manifest_json(context)),
+        text_file(
+            "schemas/component.schema.json",
+            render_component_schema_json(context),
+        ),
         text_file("Makefile", render_makefile()),
         text_file("build.rs", render_build_rs()),
         text_file("src/lib.rs", render_lib_rs(context)),
@@ -549,17 +585,19 @@ package = "greentic:component"
 world = "greentic:component/component@0.6.0"
 
 [dependencies]
-greentic-types = "0.4"
-greentic-interfaces-guest = {{ version = "0.4", default-features = false, features = ["component-v0-6"] }}
+greentic-types = {{ {greentic_types} }}
+greentic-interfaces-guest = {{ {greentic_interfaces_guest}, default-features = false, features = ["component-v0-6"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 
 [build-dependencies]
-greentic-types = "0.4"
+greentic-types = {{ {greentic_types} }}
 serde_json = "1"
 "#,
         name = context.name,
-        abi_version = context.abi_version
+        abi_version = context.abi_version,
+        greentic_types = context.dependency_templates.greentic_types,
+        greentic_interfaces_guest = context.dependency_templates.greentic_interfaces_guest
     )
 }
 
@@ -624,20 +662,17 @@ wasm:
 	for cand in \
 		"$${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/$(NAME_UNDERSCORE).wasm" \
 		"$${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/$(NAME).wasm" \
-		"$${CARGO_TARGET_DIR:-target}/wasm32-wasip1/release/$(NAME_UNDERSCORE).wasm" \
-		"$${CARGO_TARGET_DIR:-target}/wasm32-wasip1/release/$(NAME).wasm" \
 		"target/wasm32-wasip2/release/$(NAME_UNDERSCORE).wasm" \
-		"target/wasm32-wasip2/release/$(NAME).wasm" \
-		"target/wasm32-wasip1/release/$(NAME_UNDERSCORE).wasm" \
-		"target/wasm32-wasip1/release/$(NAME).wasm"; do \
+		"target/wasm32-wasip2/release/$(NAME).wasm"; do \
 		if [ -f "$$cand" ]; then WASM_SRC="$$cand"; break; fi; \
 	done; \
 	if [ -z "$$WASM_SRC" ]; then \
-		echo "unable to locate wasm build artifact for $(NAME)"; \
+		echo "unable to locate wasm32-wasip2 component build artifact for $(NAME)"; \
 		exit 1; \
 	fi; \
 	mkdir -p $(DIST_DIR); \
-	cp "$$WASM_SRC" $(WASM_OUT)
+	cp "$$WASM_SRC" $(WASM_OUT); \
+	greentic-component hash ./component.manifest.json --wasm $(WASM_OUT)
 
 doctor:
 	greentic-component doctor $(WASM_OUT)
@@ -647,159 +682,172 @@ doctor:
 
 fn render_manifest_json(context: &WizardContext) -> String {
     let name_snake = context.name.replace('-', "_");
-    format!(
-        r#"{{
-  "$schema": "https://greenticai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
-  "id": "com.example.{name}",
-  "name": "{name}",
-  "version": "0.1.0",
-  "world": "greentic:component/component@0.6.0",
-  "describe_export": "describe",
-  "operations": [
-    {{
-      "name": "handle_message",
-      "input_schema": {{
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "{name} handle input",
-        "type": "object",
-        "required": ["input"],
-        "properties": {{
-          "input": {{
-            "type": "string",
-            "default": "Hello from {name}!"
-          }}
-        }},
-        "additionalProperties": false
-      }},
-      "output_schema": {{
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "{name} handle output",
-        "type": "object",
-        "required": ["message"],
-        "properties": {{
-          "message": {{
-            "type": "string"
-          }}
-        }},
-        "additionalProperties": false
-      }}
-    }},
-    {{
-      "name": "qa-spec",
-      "input_schema": {{
-        "type": "object",
-        "properties": {{
-          "mode": {{ "type": "string" }}
-        }},
-        "additionalProperties": true
-      }},
-      "output_schema": {{
-        "type": "object",
-        "additionalProperties": true
-      }}
-    }},
-    {{
-      "name": "apply-answers",
-      "input_schema": {{
-        "type": "object",
-        "properties": {{
-          "mode": {{ "type": "string" }},
-          "current_config": {{ "type": "object" }},
-          "answers": {{ "type": "object" }}
-        }},
-        "additionalProperties": true
-      }},
-      "output_schema": {{
-        "type": "object",
-        "required": ["ok", "warnings", "errors"],
-        "properties": {{
-          "ok": {{ "type": "boolean" }},
-          "warnings": {{ "type": "array" }},
-          "errors": {{ "type": "array" }},
-          "config": {{ "type": "object" }}
-        }},
-        "additionalProperties": true
-      }}
-    }},
-    {{
-      "name": "i18n-keys",
-      "input_schema": {{
-        "type": "object",
-        "additionalProperties": true
-      }},
-      "output_schema": {{
-        "type": "array",
-        "items": {{ "type": "string" }}
-      }}
-    }}
-  ],
-  "default_operation": "handle_message",
-  "config_schema": {{
-    "type": "object",
-    "required": [],
-    "properties": {{}},
-    "additionalProperties": false
-  }},
-  "supports": ["messaging"],
-  "profiles": {{
-    "default": "stateless",
-    "supported": ["stateless"]
-  }},
-  "secret_requirements": [],
-  "capabilities": {{
-    "wasi": {{
-      "filesystem": {{
-        "mode": "none",
-        "mounts": []
-      }},
-      "random": true,
-      "clocks": true
-    }},
-    "host": {{
-      "messaging": {{
-        "inbound": true,
-        "outbound": true
-      }},
-      "telemetry": {{
-        "scope": "node"
-      }},
-      "secrets": {{
-        "required": []
-      }}
-    }}
-  }},
-  "limits": {{
-    "memory_mb": 128,
-    "wall_time_ms": 1000
-  }},
-  "artifacts": {{
-    "component_wasm": "target/wasm32-wasip2/release/{name_snake}.wasm"
-  }},
-  "hashes": {{
-    "component_wasm": "blake3:0000000000000000000000000000000000000000000000000000000000000000"
-  }},
-  "dev_flows": {{
-    "default": {{
-      "format": "flow-ir-json",
-      "graph": {{
-        "nodes": [
-          {{ "id": "start", "type": "start" }},
-          {{ "id": "end", "type": "end" }}
-        ],
-        "edges": [
-          {{ "from": "start", "to": "end" }}
-        ]
-      }}
-    }}
-  }}
-}}
-"#,
-        name = context.name,
-        name_snake = name_snake
-    )
+    let mut operations = context
+        .user_operations
+        .iter()
+        .map(|operation_name| {
+            json!({
+                "name": operation_name,
+                "input_schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "title": format!("{} {} input", context.name, operation_name),
+                    "type": "object",
+                    "required": ["input"],
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "default": format!("Hello from {}!", context.name)
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "output_schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "title": format!("{} {} output", context.name, operation_name),
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": {
+                        "message": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    operations.extend([
+        json!({
+            "name": "qa-spec",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": format!("{} qa-spec input", context.name),
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["default", "setup", "install", "update", "upgrade", "remove"]
+                    }
+                },
+                "required": ["mode"],
+                "additionalProperties": false
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["setup", "update", "remove"]
+                    },
+                    "title_i18n_key": { "type": "string" },
+                    "description_i18n_key": { "type": "string" },
+                    "fields": {
+                        "type": "array",
+                        "items": { "type": "object" }
+                    }
+                },
+                "required": ["mode", "fields"],
+                "additionalProperties": true
+            }
+        }),
+        json!({
+            "name": "apply-answers",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": format!("{} apply-answers input", context.name),
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string" },
+                    "current_config": { "type": "object" },
+                    "answers": { "type": "object" }
+                },
+                "additionalProperties": true
+            },
+            "output_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": format!("{} apply-answers output", context.name),
+                "type": "object",
+                "required": ["ok", "warnings", "errors"],
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "warnings": { "type": "array", "items": { "type": "string" } },
+                    "errors": { "type": "array", "items": { "type": "string" } },
+                    "config": { "type": "object" }
+                },
+                "additionalProperties": true
+            }
+        }),
+        json!({
+            "name": "i18n-keys",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": format!("{} i18n-keys input", context.name),
+                "type": "object",
+                "additionalProperties": false
+            },
+            "output_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": format!("{} i18n-keys output", context.name),
+                "type": "array",
+                "items": { "type": "string" }
+            }
+        }),
+    ]);
+
+    let mut manifest = json!({
+        "$schema": "https://greenticai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
+        "id": format!("com.example.{}", context.name),
+        "name": context.name,
+        "version": "0.1.0",
+        "world": "greentic:component/component@0.6.0",
+        "describe_export": "describe",
+        "operations": operations,
+        "default_operation": context.default_operation,
+        "config_schema": context.config_schema.manifest_schema(),
+        "supports": ["messaging"],
+        "profiles": {
+            "default": "stateless",
+            "supported": ["stateless"]
+        },
+        "secret_requirements": context.runtime_capabilities.manifest_secret_requirements(),
+        "capabilities": context.runtime_capabilities.manifest_capabilities(),
+        "limits": {
+            "memory_mb": 128,
+            "wall_time_ms": 1000
+        },
+        "artifacts": {
+            "component_wasm": format!("target/wasm32-wasip2/release/{name_snake}.wasm")
+        },
+        "hashes": {
+            "component_wasm": "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dev_flows": {
+            "default": {
+                "format": "flow-ir-json",
+                "graph": {
+                    "nodes": [
+                        { "id": "start", "type": "start" },
+                        { "id": "end", "type": "end" }
+                    ],
+                    "edges": [
+                        { "from": "start", "to": "end" }
+                    ]
+                }
+            }
+        }
+    });
+    if let Some(telemetry) = context.runtime_capabilities.manifest_telemetry() {
+        manifest["telemetry"] = telemetry;
+    }
+    serde_json::to_string_pretty(&manifest).expect("wizard manifest should serialize")
+}
+
+fn render_component_schema_json(context: &WizardContext) -> String {
+    serde_json::to_string_pretty(&context.config_schema.component_schema_file(&context.name))
+        .expect("wizard config schema should serialize")
 }
 
 fn render_lib_rs(context: &WizardContext) -> String {
+    let user_describe_ops = render_lib_user_describe_ops(context);
+    let config_schema_rust = context.config_schema.rust_schema_ir();
     format!(
         r#"#[cfg(target_arch = "wasm32")]
 use std::collections::BTreeMap;
@@ -838,73 +886,62 @@ impl node::Guest for Component {{
     fn describe() -> node::ComponentDescriptor {{
         let input_schema_cbor = input_schema_cbor();
         let output_schema_cbor = output_schema_cbor();
+        let mut ops = vec![
+{user_describe_ops}
+        ];
+        ops.extend(vec![
+            node::Op {{
+                name: "qa-spec".to_string(),
+                summary: Some("Return QA spec for requested mode".to_string()),
+                input: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                output: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                examples: Vec::new(),
+            }},
+            node::Op {{
+                name: "apply-answers".to_string(),
+                summary: Some("Apply QA answers and optionally return config override".to_string()),
+                input: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                output: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                examples: Vec::new(),
+            }},
+            node::Op {{
+                name: "i18n-keys".to_string(),
+                summary: Some("Return i18n keys referenced by QA/setup".to_string()),
+                input: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                output: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(output_schema_cbor),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                examples: Vec::new(),
+            }},
+        ]);
         node::ComponentDescriptor {{
             name: COMPONENT_NAME.to_string(),
             version: COMPONENT_VERSION.to_string(),
             summary: Some(format!("Greentic component {{COMPONENT_NAME}}")),
             capabilities: Vec::new(),
-            ops: vec![
-                node::Op {{
-                    name: "handle_message".to_string(),
-                    summary: Some("Handle a single message input".to_string()),
-                    input: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    output: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    examples: Vec::new(),
-                }},
-                node::Op {{
-                    name: "qa-spec".to_string(),
-                    summary: Some("Return QA spec for requested mode".to_string()),
-                    input: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    output: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    examples: Vec::new(),
-                }},
-                node::Op {{
-                    name: "apply-answers".to_string(),
-                    summary: Some("Apply QA answers and optionally return config override".to_string()),
-                    input: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    output: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    examples: Vec::new(),
-                }},
-                node::Op {{
-                    name: "i18n-keys".to_string(),
-                    summary: Some("Return i18n keys referenced by QA/setup".to_string()),
-                    input: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    output: node::IoSchema {{
-                        schema: node::SchemaSource::InlineCbor(output_schema_cbor),
-                        content_type: "application/cbor".to_string(),
-                        schema_version: None,
-                    }},
-                    examples: Vec::new(),
-                }},
-            ],
+            ops,
             schemas: Vec::new(),
             setup: None,
         }}
@@ -998,11 +1035,7 @@ fn output_schema() -> SchemaIr {{
 #[cfg(target_arch = "wasm32")]
 #[allow(dead_code)]
 fn config_schema() -> SchemaIr {{
-    SchemaIr::Object {{
-        properties: BTreeMap::new(),
-        required: Vec::new(),
-        additional: AdditionalProperties::Forbid,
-    }}
+    {config_schema_rust}
 }}
 
 #[cfg(target_arch = "wasm32")]
@@ -1064,8 +1097,37 @@ fn run_component_cbor(operation: &str, input: Vec<u8>) -> Vec<u8> {{
     encode_cbor(&output)
 }}
 "#,
-        name = context.name
+        name = context.name,
+        user_describe_ops = user_describe_ops
     )
+}
+
+fn render_lib_user_describe_ops(context: &WizardContext) -> String {
+    context
+        .user_operations
+        .iter()
+        .map(|name| {
+            format!(
+                r#"            node::Op {{
+                name: "{name}".to_string(),
+                summary: Some("Handle a single message input".to_string()),
+                input: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                output: node::IoSchema {{
+                    schema: node::SchemaSource::InlineCbor(output_schema_cbor.clone()),
+                    content_type: "application/cbor".to_string(),
+                    schema_version: None,
+                }},
+                examples: Vec::new(),
+            }}"#,
+                name = name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n")
 }
 
 fn render_qa_rs() -> String {

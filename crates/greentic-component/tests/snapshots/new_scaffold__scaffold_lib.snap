@@ -137,11 +137,7 @@ pub fn describe_payload() -> String {
             "org": COMPONENT_ORG,
             "version": COMPONENT_VERSION,
             "world": "greentic:component/component@0.6.0",
-            "schemas": {
-                "component": "schemas/component.schema.json",
-                "input": "schemas/io/input.schema.json",
-                "output": "schemas/io/output.schema.json"
-            }
+            "self_describing": true
         }
     })
     .to_string()

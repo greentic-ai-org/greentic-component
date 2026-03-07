@@ -11,11 +11,22 @@ Global:
 
 ## new
 - Purpose: scaffold a new component repo from a template (default: `rust-wasi-p2-min`).
-- Usage: `greentic-component new --name hello-world --org ai.greentic [--template rust-wasi-p2-min] [--path ./hello-world] [--version 0.1.0] [--license MIT] [--wit-world greentic:component/component@0.6.0] [--non-interactive] [--no-git] [--no-check] [--json]`.
+- Usage: `greentic-component new --name hello-world --org ai.greentic [--template rust-wasi-p2-min] [--path ./hello-world] [--version 0.1.0] [--license MIT] [--wit-world greentic:component/component@0.6.0] [--operation render,sync-state] [--default-operation sync-state] [--filesystem-mode none|read_only|sandbox] [--filesystem-mount assets:assets:/assets] [--messaging-inbound] [--messaging-outbound] [--events-inbound] [--events-outbound] [--http-client] [--state-read] [--telemetry-scope tenant|pack|node] [--telemetry-span-prefix component.demo] [--telemetry-attribute key=value] [--secret-key API_TOKEN] [--secret-env dev] [--secret-tenant default] [--secret-format text] [--non-interactive] [--no-git] [--no-check] [--json]`.
 - Options:
 - `--version <semver>` sets the initial component version (default: `0.1.0`).
 - `--license <id>` sets the license identifier embedded in generated sources (default: `MIT`).
 - `--wit-world <name>` sets the exported WIT world name (default: `greentic:component/component@0.6.0`).
+- `--operation <name[,name...]>` declares one or more user operations to scaffold into `operations[]`; repeat the flag or pass a comma-separated list. If omitted, `handle_message` is used.
+- `--default-operation <name>` writes the canonical `default_operation` field and must match one of the declared user operations.
+- Capability authoring:
+- `--filesystem-mode` and `--filesystem-mount` write `capabilities.wasi.filesystem`.
+- `--messaging-inbound` / `--messaging-outbound` write `capabilities.host.messaging`.
+- `--events-inbound` / `--events-outbound` write `capabilities.host.events`.
+- `--http-client` / `--http-server` write `capabilities.host.http`.
+- `--state-read` / `--state-write` / `--state-delete` write `capabilities.host.state`.
+- `--telemetry-scope` writes telemetry permission to `capabilities.host.telemetry.scope`.
+- `--telemetry-span-prefix` and `--telemetry-attribute` write top-level `telemetry` config.
+- `--secret-key`, `--secret-env`, `--secret-tenant`, and `--secret-format` write top-level `secret_requirements` and mirror the same requirements into `capabilities.host.secrets.required`.
 - Tips: keep `--no-check` off in CI unless you already built the wasm; use `--template` to point at custom templates (listed via `templates`); `--no-git` skips the init/commit step. The CLI prints each step (scaffold, git, cargo check) and shows cargo check duration; the first check can take a while while the wasm toolchain downloads.
 
 ## templates
@@ -24,9 +35,12 @@ Global:
 - Tips: use `--json` to drive tooling/selection in scripts; template paths are shown for local overrides.
 
 ## wizard
-- Purpose: run wizard workflows on the deterministic plan core (`create`, `build_test`, `doctor`).
-- Usage: `greentic-component wizard [run|validate|apply] --mode create|build_test|doctor [--execution dry-run|execute] [--answers answers.json] [--emit-answers answers.json] [--schema-version x.y.z] [--migrate] [--project-root path] [--template id] [--full-tests]`.
+- Purpose: run wizard workflows on the deterministic plan core (`create`, `add_operation`, `update_operation`, `build_test`, `doctor`).
+- Usage: `greentic-component wizard [run|validate|apply] --mode create|add_operation|update_operation|build_test|doctor [--execution dry-run|execute] [--answers answers.json] [--emit-answers answers.json] [--schema-version x.y.z] [--migrate] [--project-root path] [--template id] [--full-tests]`.
 - Tips: use `validate` (or `--validate`) to emit plan JSON without side effects; use `apply` (or `--apply`) to execute side effects; use `--answers` for non-interactive replay and `--emit-answers` to persist an AnswerDocument envelope. Legacy `--qa-answers` and `--qa-answers-out` remain supported for compatibility.
+- Interactive create flow: the text wizard now asks only for name, output path, and `Advanced setup` first. If you answer `no`, the rest of the create-time authoring inputs stay at defaults.
+- Operation authoring: `create` accepts authored operations from answer documents using either an `operations` array or an `operation_names` comma-separated string; `add_operation` appends a new user operation to the manifest and generated wizard scaffold source; `update_operation` renames an existing user operation while keeping `default_operation` aligned when requested. `new` now supports create-time operation scaffolding too, but `wizard` remains the richer edit surface for existing components.
+- Capability authoring: `create` also accepts canonical runtime capability answer fields for filesystem, messaging, events, HTTP, state, telemetry permission/config, and secret requirements. See [component_runtime_capabilities.md](/projects/ai/greentic-ng/greentic-component/docs/component_runtime_capabilities.md).
 
 ## inspect
 - Purpose: inspect a component manifest or a self-describing 0.6.0 wasm/describe artifact.
@@ -100,7 +114,7 @@ Global:
   - `lifecycle exports: init=<bool> health=<bool> shutdown=<bool>` — optional lifecycle hooks present in the wasm. Implement `on_start`/`on_stop`/health in your guest bindings if your host expects them; omit if not needed.
   - `describe payload versions` — number of describe payloads embedded (typically 1).
   - `redaction hints` — `x-redact` markers. Logs/inspectors can leak secrets/PII if fields aren’t redacted; add `x-redact` to sensitive fields so hosts/tooling can mask them. “none” means nothing will be redacted automatically.
-  - `defaults applied` — config defaults auto-applied; set defaults in `schemas/io/input.schema.json` for required fields to enable dev flows.
+- `defaults applied` — config defaults auto-applied; set defaults on required fields inside the selected operation’s `input_schema` so dev flows can be regenerated.
   - `supports` — flow kinds declared; adjust `supports` in the manifest.
   - `capabilities declared` — wasi/host surfaces requested; keep minimal for least privilege.
   - `limits configured` — whether resource limits are present; set `limits` for guardrails.
@@ -117,7 +131,7 @@ Doctor output reference
 - `lifecycle exports: init=<bool> health=<bool> shutdown=<bool>` — Optional lifecycle hooks detected; implement guest bindings if the host expects startup/health/shutdown.
 - `describe payload versions: N` — Number of embedded describe payloads (typically 1).
 - `redaction hints: ...` — `x-redact` paths; add to sensitive fields to prevent leaking secrets/PII in logs/inspectors.
-- `defaults applied: ...` — Config defaults applied; set defaults in `schemas/io/input.schema.json` (required fields should usually have defaults).
+- `defaults applied: ...` — Config defaults applied; set defaults in the selected operation’s `input_schema` (required fields should usually have defaults).
 - `supports: [...]` — Flow kinds declared; set in manifest.
 - `capabilities declared: ...` — Requested wasi/host surfaces; keep minimal for least privilege.
 - `limits configured: true/false` — Resource limits present; set `limits` to give hosts guardrails.

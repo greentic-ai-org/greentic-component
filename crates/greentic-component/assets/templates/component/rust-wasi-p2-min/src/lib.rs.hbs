@@ -41,8 +41,9 @@ impl node::Guest for Component {
             summary: Some(format!("Greentic component {COMPONENT_NAME}")),
             capabilities: Vec::new(),
             ops: vec![
+{{#each user_operations}}
                 node::Op {
-                    name: "handle_message".to_string(),
+                    name: "{{ name }}".to_string(),
                     summary: Some("Handle a single message input".to_string()),
                     input: node::IoSchema {
                         schema: node::SchemaSource::InlineCbor(input_schema_cbor.clone()),
@@ -56,6 +57,7 @@ impl node::Guest for Component {
                     },
                     examples: Vec::new(),
                 },
+{{/each}}
                 node::Op {
                     name: "qa-spec".to_string(),
                     summary: Some("Return QA spec (CBOR) for a requested mode".to_string()),
@@ -133,11 +135,7 @@ pub fn describe_payload() -> String {
             "org": COMPONENT_ORG,
             "version": COMPONENT_VERSION,
             "world": "{{ wit_world }}",
-            "schemas": {
-                "component": "schemas/component.schema.json",
-                "input": "schemas/io/input.schema.json",
-                "output": "schemas/io/output.schema.json"
-            }
+            "self_describing": true
         }
     })
     .to_string()
@@ -213,11 +211,7 @@ fn output_schema() -> SchemaIr {
 #[cfg(target_arch = "wasm32")]
 #[allow(dead_code)]
 fn config_schema() -> SchemaIr {
-    SchemaIr::Object {
-        properties: BTreeMap::new(),
-        required: Vec::new(),
-        additional: AdditionalProperties::Forbid,
-    }
+{{{ config_schema_rust }}}
 }
 
 #[cfg(target_arch = "wasm32")]

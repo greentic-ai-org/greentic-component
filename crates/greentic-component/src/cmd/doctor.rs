@@ -11,13 +11,15 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use super::path::strip_file_scheme;
 use crate::cmd::component_world::is_fallback_world;
-use crate::{ComponentError, abi, loader};
+use crate::test_harness::{HarnessConfig, TestHarness};
+use crate::{ComponentError, abi, loader, parse_manifest};
 
 use greentic_types::cbor::canonical;
 use greentic_types::schemas::common::schema_ir::{AdditionalProperties, SchemaIr};
 use greentic_types::schemas::component::v0_6_0::{
     ComponentDescribe, ComponentInfo, ComponentQaSpec, QaMode, schema_hash,
 };
+use greentic_types::{EnvId, TenantCtx, TenantId};
 
 const COMPONENT_WORLD_V0_6_0: &str = "greentic:component/component@0.6.0";
 const SELF_DESCRIBE_TAG: [u8; 3] = [0xd9, 0xd9, 0xf7];
@@ -56,8 +58,10 @@ pub fn run(args: DoctorArgs) -> Result<(), ComponentError> {
     let target_path = strip_file_scheme(Path::new(&args.target));
     let wasm_path = resolve_wasm_path(&args.target, &target_path, args.manifest.as_deref())
         .map_err(ComponentError::Doctor)?;
+    let manifest_path = discover_manifest_path(&wasm_path, &target_path, args.manifest.as_deref());
 
-    let report = DoctorReport::from_wasm(&wasm_path).map_err(ComponentError::Doctor)?;
+    let report = DoctorReport::from_wasm(&wasm_path, manifest_path.as_deref())
+        .map_err(ComponentError::Doctor)?;
     match args.format {
         DoctorFormat::Human => report.emit_human(),
         DoctorFormat::Json => report.emit_json()?,
@@ -67,6 +71,29 @@ pub fn run(args: DoctorArgs) -> Result<(), ComponentError> {
         return Err(ComponentError::Doctor("doctor checks failed".to_string()));
     }
     Ok(())
+}
+
+fn discover_manifest_path(
+    wasm_path: &Path,
+    target_path: &Path,
+    explicit: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(path.to_path_buf());
+    }
+
+    let mut candidates = Vec::new();
+    if target_path.is_dir() {
+        candidates.push(target_path.join("component.manifest.json"));
+    }
+    if let Some(parent) = wasm_path.parent() {
+        candidates.push(parent.join("component.manifest.json"));
+        if let Some(grandparent) = parent.parent() {
+            candidates.push(grandparent.join("component.manifest.json"));
+        }
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn resolve_wasm_path(
@@ -148,12 +175,16 @@ struct DoctorReport {
 }
 
 impl DoctorReport {
-    fn from_wasm(wasm_path: &Path) -> Result<Self, String> {
+    fn from_wasm(wasm_path: &Path, manifest_path: Option<&Path>) -> Result<Self, String> {
         let mut report = DoctorReport::default();
         report.validate_world(wasm_path);
 
         let mut caller = ComponentCaller::new(wasm_path)
             .map_err(|err| format!("doctor: failed to load component: {err}"))?;
+
+        if !caller.has_interface("component-descriptor") && caller.has_interface("node") {
+            return report.validate_node_component(wasm_path, manifest_path);
+        }
 
         let info_bytes = report.require_export_bytes(
             &mut caller,
@@ -187,7 +218,9 @@ impl DoctorReport {
             if let Some(bytes) = spec_bytes.as_deref() {
                 match decode_cbor::<ComponentQaSpec>(bytes) {
                     Ok(spec) => {
-                        if spec.mode != mode {
+                        let compatible_default =
+                            mode == QaMode::Default && spec.mode == QaMode::Setup;
+                        if spec.mode != mode && !compatible_default {
                             report.error(
                                 "doctor.qa.mode_mismatch",
                                 format!("qa-spec returned {:?} for mode {mode_name}", spec.mode),
@@ -240,6 +273,132 @@ impl DoctorReport {
 
         report.finalize();
         Ok(report)
+    }
+
+    fn validate_node_component(
+        mut self,
+        wasm_path: &Path,
+        manifest_path: Option<&Path>,
+    ) -> Result<Self, String> {
+        let Some(manifest_path) = manifest_path else {
+            self.error(
+                "doctor.node.manifest_required",
+                "node-interface doctor checks require a component.manifest.json path".to_string(),
+                "manifest",
+                Some("pass --manifest or run doctor from the component project root".to_string()),
+            );
+            self.finalize();
+            return Ok(self);
+        };
+
+        let raw_manifest = fs::read_to_string(manifest_path)
+            .map_err(|err| format!("failed to read {}: {err}", manifest_path.display()))?;
+        let manifest = parse_manifest(&raw_manifest)
+            .map_err(|err| format!("failed to parse {}: {err}", manifest_path.display()))?;
+        let harness = new_doctor_harness(wasm_path, &manifest)?;
+
+        let i18n_keys = match invoke_json(&harness, "i18n-keys", &serde_json::json!({})) {
+            Ok(value) => match json_array_to_string_set(&value) {
+                Ok(keys) => Some(keys),
+                Err(err) => {
+                    self.error(
+                        "doctor.export.invalid_strings",
+                        format!("node.i18n-keys returned invalid strings: {err}"),
+                        "node.i18n-keys",
+                        None,
+                    );
+                    None
+                }
+            },
+            Err(err) => {
+                self.error(
+                    "doctor.export.call_failed",
+                    format!("node.i18n-keys failed: {err}"),
+                    "node.i18n-keys",
+                    None,
+                );
+                None
+            }
+        };
+
+        let mut qa_specs = BTreeMap::new();
+        for (mode, mode_name) in qa_modes() {
+            match invoke_json(
+                &harness,
+                "qa-spec",
+                &serde_json::json!({ "mode": mode_name }),
+            ) {
+                Ok(value) => match serde_json::from_value::<ComponentQaSpec>(value) {
+                    Ok(spec) => {
+                        let compatible_default =
+                            mode == QaMode::Default && spec.mode == QaMode::Setup;
+                        if spec.mode != mode && !compatible_default {
+                            self.error(
+                                "doctor.qa.mode_mismatch",
+                                format!("qa-spec returned {:?} for mode {mode_name}", spec.mode),
+                                "qa-spec",
+                                None,
+                            );
+                        }
+                        qa_specs.insert(mode_name.to_string(), spec);
+                    }
+                    Err(err) => self.error(
+                        "doctor.qa.decode_failed",
+                        format!("qa-spec({mode_name}) decode failed: {err}"),
+                        "qa-spec",
+                        None,
+                    ),
+                },
+                Err(err) => self.error(
+                    "doctor.export.call_failed",
+                    format!("node.qa-spec failed: {err}"),
+                    "node.qa-spec",
+                    None,
+                ),
+            }
+        }
+        self.validate_i18n(&i18n_keys, &qa_specs);
+
+        for (_mode, mode_name) in qa_modes() {
+            let payload = sample_apply_answers_payload(mode_name);
+            match invoke_json(&harness, "apply-answers", &payload) {
+                Ok(value) => self.validate_apply_answers_value(mode_name, &value),
+                Err(err) => self.error(
+                    "doctor.export.call_failed",
+                    format!("node.apply-answers failed: {err}"),
+                    "node.apply-answers",
+                    None,
+                ),
+            }
+        }
+
+        if let Some(operation) = default_user_operation(&manifest) {
+            match invoke_json(
+                &harness,
+                operation,
+                &serde_json::json!({ "input": "doctor" }),
+            ) {
+                Ok(value) => {
+                    if !value.is_object() {
+                        self.error(
+                            "doctor.runtime.invalid_output",
+                            format!("{operation} returned non-object output"),
+                            format!("node.invoke.{operation}"),
+                            None,
+                        );
+                    }
+                }
+                Err(err) => self.error(
+                    "doctor.export.call_failed",
+                    format!("node.invoke({operation}) failed: {err}"),
+                    format!("node.invoke.{operation}"),
+                    None,
+                ),
+            }
+        }
+
+        self.finalize();
+        Ok(self)
     }
 
     fn validate_world(&mut self, wasm_path: &Path) {
@@ -435,6 +594,43 @@ impl DoctorReport {
                     );
                 }
             }
+        }
+    }
+
+    fn validate_apply_answers_value(&mut self, mode_name: &str, value: &JsonValue) {
+        let Some(object) = value.as_object() else {
+            self.error(
+                "doctor.qa.apply_answers.invalid_shape",
+                format!("apply-answers({mode_name}) returned non-object JSON"),
+                format!("apply-answers.{mode_name}"),
+                None,
+            );
+            return;
+        };
+
+        if !object.get("ok").is_some_and(JsonValue::is_boolean) {
+            self.error(
+                "doctor.qa.apply_answers.invalid_shape",
+                format!("apply-answers({mode_name}) must include boolean `ok`"),
+                format!("apply-answers.{mode_name}.ok"),
+                None,
+            );
+        }
+        if !object.get("warnings").is_some_and(|value| value.is_array()) {
+            self.error(
+                "doctor.qa.apply_answers.invalid_shape",
+                format!("apply-answers({mode_name}) must include array `warnings`"),
+                format!("apply-answers.{mode_name}.warnings"),
+                None,
+            );
+        }
+        if !object.get("errors").is_some_and(|value| value.is_array()) {
+            self.error(
+                "doctor.qa.apply_answers.invalid_shape",
+                format!("apply-answers({mode_name}) must include array `errors`"),
+                format!("apply-answers.{mode_name}.errors"),
+                None,
+            );
         }
     }
 
@@ -674,6 +870,10 @@ impl ComponentCaller {
 
         call_component_func(&mut self.store, &func, params)
     }
+
+    fn has_interface(&mut self, interface: &str) -> bool {
+        resolve_interface_index(&self.instance, &mut self.store, interface).is_some()
+    }
 }
 
 fn resolve_interface_index(
@@ -759,6 +959,119 @@ fn val_to_strings(val: &Val) -> Result<Vec<String>, String> {
 fn decode_cbor<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     let payload = strip_self_describe_tag(bytes);
     canonical::from_cbor(payload).map_err(|err| format!("CBOR decode failed: {err}"))
+}
+
+fn new_doctor_harness(
+    wasm_path: &Path,
+    manifest: &crate::manifest::ComponentManifest,
+) -> Result<TestHarness, String> {
+    let env: EnvId = "dev"
+        .to_string()
+        .try_into()
+        .map_err(|err| format!("invalid doctor env: {err}"))?;
+    let tenant: TenantId = "doctor"
+        .to_string()
+        .try_into()
+        .map_err(|err| format!("invalid doctor tenant: {err}"))?;
+    let tenant_ctx = TenantCtx::new(env, tenant)
+        .with_flow("doctor")
+        .with_node("doctor");
+    let allowed_secrets = manifest
+        .secret_requirements
+        .iter()
+        .map(|req| req.key.to_string())
+        .chain(
+            manifest
+                .capabilities
+                .host
+                .secrets
+                .as_ref()
+                .into_iter()
+                .flat_map(|spec| spec.required.iter().map(|req| req.key.to_string())),
+        )
+        .collect();
+
+    TestHarness::new(HarnessConfig {
+        wasm_bytes: fs::read(wasm_path)
+            .map_err(|err| format!("failed to read {}: {err}", wasm_path.display()))?,
+        tenant_ctx,
+        flow_id: "doctor".to_string(),
+        node_id: Some("doctor".to_string()),
+        state_prefix: "doctor".to_string(),
+        state_seeds: Vec::new(),
+        allow_state_read: true,
+        allow_state_write: true,
+        allow_state_delete: true,
+        allow_secrets: true,
+        allowed_secrets,
+        secrets: Default::default(),
+        wasi_preopens: Vec::new(),
+        config: Some(serde_json::json!({})),
+        allow_http: true,
+        timeout_ms: 5_000,
+        max_memory_bytes: 64 * 1024 * 1024,
+    })
+    .map_err(|err| format!("failed to initialize doctor harness: {err}"))
+}
+
+fn invoke_json(
+    harness: &TestHarness,
+    operation: &str,
+    payload: &JsonValue,
+) -> Result<JsonValue, String> {
+    let outcome = harness
+        .invoke(operation, payload)
+        .map_err(|err| format!("invoke component: {err}"))?;
+    serde_json::from_str(&outcome.output_json)
+        .map_err(|err| format!("decode operation output json failed: {err}"))
+}
+
+fn json_array_to_string_set(value: &JsonValue) -> Result<BTreeSet<String>, String> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| "expected array<string>".to_string())?;
+    let mut out = BTreeSet::new();
+    for item in array {
+        let Some(string) = item.as_str() else {
+            return Err("expected array<string>".to_string());
+        };
+        out.insert(string.to_string());
+    }
+    Ok(out)
+}
+
+fn sample_apply_answers_payload(mode_name: &str) -> JsonValue {
+    let answers = match mode_name {
+        "setup" | "default" => serde_json::json!({
+            "api_key": "demo-key",
+            "region": "eu",
+            "webhook_base_url": "https://example.invalid/webhook",
+            "enabled": "true"
+        }),
+        "remove" => serde_json::json!({
+            "confirm_remove": "true"
+        }),
+        _ => serde_json::json!({
+            "enabled": "true"
+        }),
+    };
+    serde_json::json!({
+        "mode": mode_name,
+        "answers": answers,
+        "current_config": {}
+    })
+}
+
+fn default_user_operation(manifest: &crate::manifest::ComponentManifest) -> Option<&str> {
+    if let Some(default) = manifest.default_operation.as_deref() {
+        return Some(default);
+    }
+
+    manifest
+        .operations
+        .iter()
+        .map(|op| op.name.as_str())
+        .find(|name| !matches!(*name, "qa-spec" | "apply-answers" | "i18n-keys"))
 }
 
 fn strip_self_describe_tag(bytes: &[u8]) -> &[u8] {

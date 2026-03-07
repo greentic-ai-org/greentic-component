@@ -21,6 +21,7 @@ use crate::cmd::i18n;
 use crate::config::{
     ConfigInferenceOptions, ConfigSchemaSource, load_manifest_with_schema, resolve_manifest_path,
 };
+use crate::describe::from_wit_world;
 use crate::parse_manifest;
 use crate::path_safety::normalize_under_root;
 use crate::schema_quality::{SchemaQualityMode, validate_operation_schemas};
@@ -400,12 +401,35 @@ fn emit_describe_artifacts(
 ) -> Result<()> {
     let abi_version = read_abi_version(manifest_dir);
     let require_describe = abi_version.as_deref() == Some("0.6.0");
+    let manifest_model = parse_manifest(
+        &serde_json::to_string(manifest).context("failed to serialize manifest for describe")?,
+    )
+    .context("failed to parse manifest for describe")?;
 
     let describe_bytes = match call_describe(wasm_path) {
         Ok(bytes) => bytes,
         Err(err) => {
             if require_describe {
-                return Err(anyhow!("describe failed: {err}"));
+                match from_wit_world(wasm_path, manifest_model.world.as_str()) {
+                    Ok(payload) => {
+                        write_wit_describe_artifacts(
+                            manifest_dir,
+                            manifest,
+                            wasm_path,
+                            abi_version.as_deref(),
+                            &payload,
+                        )?;
+                        eprintln!(
+                            "warning: describe export unavailable, emitted WIT-derived describe.json instead ({err})"
+                        );
+                        return Ok(());
+                    }
+                    Err(wit_err) => {
+                        return Err(anyhow!(
+                            "describe failed: {err}; WIT fallback failed: {wit_err}"
+                        ));
+                    }
+                }
             }
             eprintln!("warning: skipping describe artifacts ({err})");
             return Ok(());
@@ -430,6 +454,32 @@ fn emit_describe_artifacts(
 
     let describe_json_path = dist_dir.join(format!("{base}.describe.json"));
     let json = serde_json::to_string_pretty(&describe)?;
+    fs::write(&describe_json_path, json + "\n")
+        .with_context(|| format!("failed to write {}", describe_json_path.display()))?;
+
+    let wasm_out = dist_dir.join(format!("{base}.wasm"));
+    if wasm_out != wasm_path {
+        let _ = fs::copy(wasm_path, &wasm_out);
+    }
+
+    Ok(())
+}
+
+fn write_wit_describe_artifacts(
+    manifest_dir: &Path,
+    manifest: &JsonValue,
+    wasm_path: &Path,
+    abi_version: Option<&str>,
+    payload: &crate::describe::DescribePayload,
+) -> Result<()> {
+    let dist_dir = manifest_dir.join("dist");
+    fs::create_dir_all(&dist_dir)
+        .with_context(|| format!("failed to create {}", dist_dir.display()))?;
+
+    let (name, abi_underscore) = artifact_basename(manifest, wasm_path, abi_version);
+    let base = format!("{name}__{abi_underscore}");
+    let describe_json_path = dist_dir.join(format!("{base}.describe.json"));
+    let json = serde_json::to_string_pretty(payload)?;
     fs::write(&describe_json_path, json + "\n")
         .with_context(|| format!("failed to write {}", describe_json_path.display()))?;
 

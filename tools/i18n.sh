@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 MODE="${1:-all}"
 AUTH_MODE="${AUTH_MODE:-auto}"
 LOCALE="${LOCALE:-en}"
-EN_PATH="${EN_PATH:-i18n/en.json}"
+EN_PATH="${EN_PATH:-crates/greentic-component/i18n/en.json}"
 I18N_TRANSLATOR_MANIFEST="${I18N_TRANSLATOR_MANIFEST:-../greentic-i18n/Cargo.toml}"
 
 usage() {
@@ -23,7 +23,7 @@ Environment overrides:
 Examples:
   tools/i18n.sh all
   AUTH_MODE=api-key tools/i18n.sh translate
-  EN_PATH=i18n/en.json tools/i18n.sh validate
+  EN_PATH=crates/greentic-component/i18n/en.json tools/i18n.sh validate
 EOF
 }
 

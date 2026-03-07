@@ -30,7 +30,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Scaffold a new Greentic component project
-    New(NewArgs),
+    New(Box<NewArgs>),
     /// Component wizard helpers
     Wizard(Box<WizardCliArgs>),
     /// List available component templates
@@ -71,7 +71,7 @@ pub fn main() -> Result<()> {
     cmd::i18n::init(cli.locale.clone());
     let engine = ScaffoldEngine::new();
     match cli.command {
-        Commands::New(args) => cmd::new::run(args, &engine),
+        Commands::New(args) => cmd::new::run(*args, &engine),
         Commands::Wizard(command) => cmd::wizard::run_cli(*command),
         Commands::Templates(args) => cmd::templates::run(args, &engine),
         Commands::Doctor(args) => cmd::doctor::run(args).map_err(Error::new),
@@ -179,6 +179,30 @@ mod tests {
                 assert!(args.json);
                 assert!(!args.no_check);
                 assert!(!args.no_git);
+                assert!(args.operation_names.is_empty());
+                assert_eq!(args.default_operation, None);
+            }
+            _ => panic!("expected new args"),
+        }
+    }
+
+    #[test]
+    fn parses_new_operation_flags() {
+        let cli = Cli::try_parse_from([
+            "greentic-component",
+            "new",
+            "--name",
+            "demo",
+            "--operation",
+            "render,sync-state",
+            "--default-operation",
+            "sync-state",
+        ])
+        .expect("expected CLI to parse");
+        match cli.command {
+            Commands::New(args) => {
+                assert_eq!(args.operation_names, vec!["render", "sync-state"]);
+                assert_eq!(args.default_operation.as_deref(), Some("sync-state"));
             }
             _ => panic!("expected new args"),
         }

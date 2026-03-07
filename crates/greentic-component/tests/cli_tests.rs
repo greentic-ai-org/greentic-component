@@ -6,8 +6,10 @@ mod support;
 use greentic_component::cmd::build;
 use greentic_component::cmd::build::BuildArgs;
 use greentic_component::error::ComponentError;
+use greentic_component::scaffold::config_schema::ConfigSchemaInput;
 use greentic_component::scaffold::deps::DependencyMode;
 use greentic_component::scaffold::engine::{DEFAULT_WIT_WORLD, ScaffoldEngine, ScaffoldRequest};
+use greentic_component::scaffold::runtime_capabilities::RuntimeCapabilitiesInput;
 use predicates::prelude::*;
 use serde_json::{Value, json};
 use std::fs;
@@ -88,6 +90,10 @@ fn doctor_detects_scaffold_directory() {
         version: "0.1.0".into(),
         license: "MIT".into(),
         wit_world: DEFAULT_WIT_WORLD.into(),
+        user_operations: vec!["handle_message".into()],
+        default_operation: "handle_message".into(),
+        runtime_capabilities: RuntimeCapabilitiesInput::default(),
+        config_schema: ConfigSchemaInput::default(),
         non_interactive: true,
         year_override: Some(2030),
         dependency_mode: DependencyMode::Local,
@@ -113,6 +119,10 @@ fn scaffold_makefile_uses_greentic_dev_commands() {
         version: "0.1.0".into(),
         license: "MIT".into(),
         wit_world: DEFAULT_WIT_WORLD.into(),
+        user_operations: vec!["handle_message".into()],
+        default_operation: "handle_message".into(),
+        runtime_capabilities: RuntimeCapabilitiesInput::default(),
+        config_schema: ConfigSchemaInput::default(),
         non_interactive: true,
         year_override: Some(2030),
         dependency_mode: DependencyMode::Local,
@@ -123,7 +133,7 @@ fn scaffold_makefile_uses_greentic_dev_commands() {
         fs::read_to_string(root.join("Makefile")).expect("Makefile should be scaffolded");
     assert!(makefile.contains("greentic-dev component build --manifest ./component.manifest.json"));
     assert!(makefile.contains(
-        "greentic-dev component doctor target/wasm32-wasip2/release/demo_dev.wasm --manifest ./component.manifest.json"
+        "greentic-dev component doctor $(WASM_OUT) --manifest ./component.manifest.json"
     ));
 }
 
@@ -140,6 +150,10 @@ fn build_logs_resolved_component_world_version() {
         version: "0.1.0".into(),
         license: "MIT".into(),
         wit_world: DEFAULT_WIT_WORLD.into(),
+        user_operations: vec!["handle_message".into()],
+        default_operation: "handle_message".into(),
+        runtime_capabilities: RuntimeCapabilitiesInput::default(),
+        config_schema: ConfigSchemaInput::default(),
         non_interactive: true,
         year_override: Some(2030),
         dependency_mode: DependencyMode::Local,
