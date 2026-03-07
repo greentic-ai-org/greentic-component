@@ -34,6 +34,7 @@ runs:
       run: |
         echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo" >> "$GITHUB_ENV"
         echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/${{ inputs.target-dir }}" >> "$GITHUB_ENV"
+        echo "$GITHUB_WORKSPACE/.cargo/bin" >> "$GITHUB_PATH"
         mkdir -p "$GITHUB_WORKSPACE/.cargo" "$GITHUB_WORKSPACE/${{ inputs.target-dir }}"
 
     - name: Install toolchain and targets
@@ -74,6 +75,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        export PATH="$GITHUB_WORKSPACE/.cargo/bin:$PATH"
         if command -v cargo-component >/dev/null 2>&1; then
           echo "cargo-component already installed: $(cargo-component --version)"
           exit 0
