@@ -157,6 +157,7 @@ fn install_cargo_wrapper(root: &Path) -> std::path::PathBuf {
     let bin_dir = root.join("test-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let wrapper_path = bin_dir.join("cargo");
+    let greentic_component_path = bin_dir.join("greentic-component");
     let real_cargo = std::process::Command::new("rustup")
         .arg("which")
         .arg("cargo")
@@ -196,6 +197,21 @@ fn install_cargo_wrapper(root: &Path) -> std::path::PathBuf {
         let mut perms = fs::metadata(&wrapper_path).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&wrapper_path, perms).unwrap();
+    }
+    let greentic_component_bin = assert_cmd::cargo::cargo_bin!("greentic-component");
+    let component_script = format!(
+        "#!/bin/sh\nset -eu\nexec \"{}\" \"$@\"\n",
+        greentic_component_bin.display()
+    );
+    fs::write(&greentic_component_path, component_script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&greentic_component_path)
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&greentic_component_path, perms).unwrap();
     }
     bin_dir
 }
