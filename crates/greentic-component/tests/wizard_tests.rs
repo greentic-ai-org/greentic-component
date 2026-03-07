@@ -157,10 +157,16 @@ fn install_cargo_wrapper(root: &Path) -> std::path::PathBuf {
     let bin_dir = root.join("test-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let wrapper_path = bin_dir.join("cargo");
-    let real_cargo = std::process::Command::new("bash")
-        .arg("-lc")
-        .arg("command -v cargo")
+    let real_cargo = std::process::Command::new("rustup")
+        .arg("which")
+        .arg("cargo")
         .output()
+        .or_else(|_| {
+            std::process::Command::new("bash")
+                .arg("-lc")
+                .arg("command -v cargo")
+                .output()
+        })
         .expect("locate cargo");
     assert!(real_cargo.status.success(), "cargo should be available");
     let real_cargo = String::from_utf8(real_cargo.stdout)
