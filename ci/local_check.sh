@@ -557,7 +557,8 @@ run_wizard_smoke() {
                     fi
                 fi
                 if [ -f "$wizard_wasm_path" ]; then
-                    run_bin_cmd "wizard update manifest hash" "$BIN_COMPONENT_HASH" "$wizard_manifest"
+                    run_bin_cmd "wizard update manifest hash" "$BIN_COMPONENT_HASH" \
+                        "$wizard_manifest" --wasm "$wizard_wasm_path"
                     run_bin_cmd "wizard inspect (wasm)" "$BIN_COMPONENT_INSPECT" \
                         "$wizard_wasm_path" --manifest "$wizard_manifest" --json --verify
                 else
