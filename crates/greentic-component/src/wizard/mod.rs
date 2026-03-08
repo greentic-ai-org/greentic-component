@@ -636,6 +636,7 @@ ABI_VERSION := $(shell awk 'BEGIN{in_meta=0} /^\[package.metadata.greentic\]/{in
 ABI_VERSION_UNDERSCORE := $(subst .,_,$(ABI_VERSION))
 DIST_DIR := dist
 WASM_OUT := $(DIST_DIR)/$(NAME)__$(ABI_VERSION_UNDERSCORE).wasm
+GREENTIC_COMPONENT ?= greentic-component
 
 .PHONY: build test fmt clippy wasm doctor
 
@@ -657,7 +658,7 @@ wasm:
 		echo "install with: cargo install cargo-component --locked"; \
 		exit 1; \
 	fi
-	RUSTFLAGS= CARGO_ENCODED_RUSTFLAGS= cargo component build --release --target wasm32-wasip2
+	RUSTFLAGS= CARGO_ENCODED_RUSTFLAGS= $(GREENTIC_COMPONENT) build --manifest ./component.manifest.json
 	WASM_SRC=""; \
 	for cand in \
 		"$${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/$(NAME_UNDERSCORE).wasm" \
@@ -672,10 +673,10 @@ wasm:
 	fi; \
 	mkdir -p $(DIST_DIR); \
 	cp "$$WASM_SRC" $(WASM_OUT); \
-	greentic-component hash ./component.manifest.json --wasm $(WASM_OUT)
+	$(GREENTIC_COMPONENT) hash ./component.manifest.json --wasm $(WASM_OUT)
 
 doctor:
-	greentic-component doctor $(WASM_OUT)
+	$(GREENTIC_COMPONENT) doctor $(WASM_OUT) --manifest ./component.manifest.json
 "#
     .to_string()
 }
@@ -868,7 +869,9 @@ pub mod i18n_bundle;
 pub mod qa;
 
 const COMPONENT_NAME: &str = "{name}";
+#[cfg(target_arch = "wasm32")]
 const COMPONENT_ORG: &str = "com.example";
+#[cfg(target_arch = "wasm32")]
 const COMPONENT_VERSION: &str = "0.1.0";
 
 #[cfg(target_arch = "wasm32")]

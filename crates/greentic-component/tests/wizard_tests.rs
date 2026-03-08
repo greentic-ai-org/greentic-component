@@ -4,6 +4,7 @@ use assert_cmd::prelude::*;
 use greentic_component::cmd::wizard::{
     ExecutionMode, RunMode, WizardArgs, WizardCliArgs, WizardSubcommand, run, run_cli,
 };
+use predicates::prelude::{PredicateBooleanExt, predicate};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -1399,7 +1400,11 @@ fn wizard_emit_answers_round_trips_all_fields_and_replay_builds_component() {
         .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_NET_OFFLINE", "true")
         .env("PATH", &path_env);
-    cargo_test.assert().success();
+    cargo_test
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("COMPONENT_ORG").not())
+        .stderr(predicate::str::contains("COMPONENT_VERSION").not());
 
     let mut wasm_build = Command::new("make");
     wasm_build
@@ -1419,9 +1424,21 @@ fn wizard_emit_answers_round_trips_all_fields_and_replay_builds_component() {
     doctor
         .arg("doctor")
         .arg(&wasm_path)
-        .arg("--manifest")
-        .arg(component_root.join("component.manifest.json"))
         .env("CARGO_NET_OFFLINE", "true")
         .env("PATH", &path_env);
-    doctor.assert().success();
+    doctor
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doctor.embedded.describe_unavailable").not());
+
+    let mut inspect = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+    inspect
+        .arg("inspect")
+        .arg(&wasm_path)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("PATH", &path_env);
+    inspect
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("describe unavailable").not());
 }

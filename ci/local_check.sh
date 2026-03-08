@@ -524,7 +524,7 @@ run_wizard_smoke() {
     local wizard_manifest="$wizard_root/component.manifest.json"
     if [ -f "$wizard_manifest" ]; then
         if grep -q "component_v0_6::node" "$wizard_root/src/lib.rs"; then
-            run_cmd "wizard wasm (make)" env CARGO_NET_OFFLINE=true make -C "$wizard_root" wasm
+            run_cmd "wizard wasm (make)" env CARGO_NET_OFFLINE=true GREENTIC_COMPONENT="$BIN_GREENTIC_COMPONENT" make -C "$wizard_root" wasm
             local wizard_wasm_rel
             wizard_wasm_rel=$(jq -r '.artifacts.component_wasm // empty' "$wizard_manifest")
             if [ -n "$wizard_wasm_rel" ] && [ "$wizard_wasm_rel" != "null" ]; then

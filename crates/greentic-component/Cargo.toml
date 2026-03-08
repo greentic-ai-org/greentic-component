@@ -93,6 +93,7 @@ walkdir = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 wasmparser = { workspace = true, optional = true }
+wasm-encoder = { workspace = true }
 wasm-metadata = { workspace = true }
 greentic-types = { workspace = true }
 greentic-qa-lib = { workspace = true, optional = true }
@@ -124,4 +125,3 @@ required-features = ["abi"]
 [[example]]
 name = "gen_contract_fixture"
 required-features = ["abi"]
-

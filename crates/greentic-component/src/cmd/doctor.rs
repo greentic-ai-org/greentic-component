@@ -11,6 +11,10 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use super::path::strip_file_scheme;
 use crate::cmd::component_world::is_fallback_world;
+use crate::embedded_compare::{compare_embedded_with_describe, compare_embedded_with_manifest};
+use crate::embedded_descriptor::{
+    VerifiedEmbeddedDescriptorV1, read_and_verify_embedded_component_manifest_section_v1,
+};
 use crate::test_harness::{HarnessConfig, TestHarness};
 use crate::{ComponentError, abi, loader, parse_manifest};
 
@@ -178,12 +182,13 @@ impl DoctorReport {
     fn from_wasm(wasm_path: &Path, manifest_path: Option<&Path>) -> Result<Self, String> {
         let mut report = DoctorReport::default();
         report.validate_world(wasm_path);
+        let embedded = report.validate_embedded_metadata(wasm_path, manifest_path)?;
 
         let mut caller = ComponentCaller::new(wasm_path)
             .map_err(|err| format!("doctor: failed to load component: {err}"))?;
 
         if !caller.has_interface("component-descriptor") && caller.has_interface("node") {
-            return report.validate_node_component(wasm_path, manifest_path);
+            return report.validate_node_component(wasm_path, manifest_path, embedded.is_some());
         }
 
         let info_bytes = report.require_export_bytes(
@@ -259,6 +264,16 @@ impl DoctorReport {
                 Ok(describe) => {
                     report.validate_info(&describe.info, "describe");
                     report.validate_describe(&describe, &bytes);
+                    if let Some(embedded) = embedded.as_ref() {
+                        report.validate_embedded_against_describe(&embedded.manifest, &describe);
+                    } else {
+                        report.warning(
+                            "doctor.embedded.describe_unavailable",
+                            "embedded metadata unavailable for compare with describe()".to_string(),
+                            "embedded_manifest",
+                            None,
+                        );
+                    }
                     report.validate_i18n(&i18n_keys, &qa_specs);
                     report.validate_apply_answers(&mut caller, &describe, &bytes);
                 }
@@ -279,6 +294,7 @@ impl DoctorReport {
         mut self,
         wasm_path: &Path,
         manifest_path: Option<&Path>,
+        _embedded_present: bool,
     ) -> Result<Self, String> {
         let Some(manifest_path) = manifest_path else {
             self.error(
@@ -399,6 +415,96 @@ impl DoctorReport {
 
         self.finalize();
         Ok(self)
+    }
+
+    fn validate_embedded_metadata(
+        &mut self,
+        wasm_path: &Path,
+        manifest_path: Option<&Path>,
+    ) -> Result<Option<VerifiedEmbeddedDescriptorV1>, String> {
+        let wasm_bytes = fs::read(wasm_path)
+            .map_err(|err| format!("failed to read {}: {err}", wasm_path.display()))?;
+        let embedded = read_and_verify_embedded_component_manifest_section_v1(&wasm_bytes)
+            .map_err(|err| format!("embedded manifest decode failed: {err}"))?;
+
+        let Some(embedded) = embedded else {
+            self.error(
+                "doctor.embedded.missing",
+                format!(
+                    "missing embedded manifest section {}",
+                    crate::EMBEDDED_COMPONENT_MANIFEST_SECTION_V1
+                ),
+                "embedded_manifest",
+                None,
+            );
+            return Ok(None);
+        };
+
+        if let Some(manifest_path) = manifest_path {
+            let raw_manifest = fs::read_to_string(manifest_path)
+                .map_err(|err| format!("failed to read {}: {err}", manifest_path.display()))?;
+            let manifest = parse_manifest(&raw_manifest)
+                .map_err(|err| format!("failed to parse {}: {err}", manifest_path.display()))?;
+            let comparison = compare_embedded_with_manifest(&embedded.manifest, &manifest);
+            for field in comparison
+                .fields
+                .into_iter()
+                .filter(|field| field.status != crate::ComparisonStatus::Match)
+            {
+                self.error(
+                    "doctor.embedded.manifest_mismatch",
+                    format!(
+                        "embedded manifest differs from canonical manifest for {}{}",
+                        field.field,
+                        field
+                            .detail
+                            .as_deref()
+                            .map(|detail| format!(": {detail}"))
+                            .unwrap_or_default()
+                    ),
+                    format!("embedded_manifest.{}", field.field),
+                    None,
+                );
+            }
+        } else {
+            self.warning(
+                "doctor.embedded.manifest_unavailable",
+                "external manifest unavailable; skipping embedded vs manifest comparison"
+                    .to_string(),
+                "embedded_manifest",
+                None,
+            );
+        }
+
+        Ok(Some(embedded))
+    }
+
+    fn validate_embedded_against_describe(
+        &mut self,
+        embedded: &crate::embedded_descriptor::EmbeddedComponentManifestV1,
+        describe: &ComponentDescribe,
+    ) {
+        let comparison = compare_embedded_with_describe(embedded, describe);
+        for field in comparison
+            .fields
+            .into_iter()
+            .filter(|field| field.status != crate::ComparisonStatus::Match)
+        {
+            self.error(
+                "doctor.embedded.describe_mismatch",
+                format!(
+                    "embedded manifest differs from describe() for {}{}",
+                    field.field,
+                    field
+                        .detail
+                        .as_deref()
+                        .map(|detail| format!(": {detail}"))
+                        .unwrap_or_default()
+                ),
+                format!("embedded_manifest.describe.{}", field.field),
+                None,
+            );
+        }
     }
 
     fn validate_world(&mut self, wasm_path: &Path) {
@@ -764,6 +870,22 @@ impl DoctorReport {
         });
     }
 
+    fn warning(
+        &mut self,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        path: impl Into<String>,
+        hint: Option<String>,
+    ) {
+        self.diagnostics.push(DoctorDiagnostic {
+            severity: Severity::Warning,
+            code: code.into(),
+            message: message.into(),
+            path: path.into(),
+            hint,
+        });
+    }
+
     fn finalize(&mut self) {
         self.diagnostics
             .sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.code.cmp(&b.code)));
@@ -809,12 +931,14 @@ impl DoctorReport {
 #[serde(rename_all = "lowercase")]
 enum Severity {
     Error,
+    Warning,
 }
 
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Severity::Error => write!(f, "error"),
+            Severity::Warning => write!(f, "warning"),
         }
     }
 }

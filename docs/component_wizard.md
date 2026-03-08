@@ -20,6 +20,7 @@ Legacy naming/compatibility details are in `docs/vision/legacy.md`.
 - `src/i18n.rs` key registry.
 - `assets/i18n/en.json` default bundle for i18n keys.
 - A `Makefile` with `build`, `test`, `fmt`, `clippy`, `wasm`, and `doctor` targets.
+- The generated `wasm` target delegates through `greentic-component build`, so the built artifact gets the embedded manifest custom section `greentic.component.manifest.v1`.
 
 **ABI Versioning + WASM Naming**
 The wizard stores ABI version in `Cargo.toml` under `[package.metadata.greentic]` and uses it to name the wasm artifact:
@@ -59,6 +60,9 @@ Example:
 - required WIT exports
 - QA modes and i18n coverage
 - strict SchemaIR + schema hash
+- presence and validity of the embedded manifest section on built artifacts
+
+When a wizard-generated component has been built successfully, `doctor` now expects the Wasm to contain the embedded manifest section and treats it as required artifact-local truth.
 
 **Flow Integration**
 After implementing your component, use Greentic Flow tooling to connect the component to a distribution client and flow registry. This keeps the wizard focused on scaffolding while flow integration is handled in the flow repo.

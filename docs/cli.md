@@ -47,8 +47,8 @@ Global:
 - Usage:
   - Manifest flow: `greentic-component inspect <manifest-or-dir> [--manifest path] [--json] [--strict]`
   - Describe flow: `greentic-component inspect <wasm> [--json] [--verify]` or `greentic-component inspect --describe <file.cbor> [--json] [--verify]`
-- Output: manifest flow prints id, wasm path, world match, hash, supports, profiles, lifecycle exports, capabilities, limits. Describe flow prints component info + operations + SchemaIR summaries; `--verify` checks schema_hash values.
-- Tips: point `--manifest` if the wasm and manifest are not co-located; use `--describe` to inspect a prebuilt artifact without executing wasm; `--json` is CI-friendly.
+- Output: manifest flow prints id, wasm path, world match, hash, supports, profiles, lifecycle exports, capabilities, limits. Wasm inspection now also reports whether the embedded custom section `greentic.component.manifest.v1` is present, whether its hash verifies, a summary of the embedded projection, and comparison verdicts against the external manifest and `describe()` when available. Describe flow prints component info + operations + SchemaIR summaries; `--verify` checks schema_hash values.
+- Tips: point `--manifest` if the wasm and manifest are not co-located; use `--describe` to inspect a prebuilt artifact without executing wasm; `--json` is CI-friendly and now includes embedded-manifest status when inspecting a wasm artifact.
 
 ## hash
 - Purpose: recompute and write `hashes.component_wasm` in the manifest.
@@ -58,7 +58,7 @@ Global:
 ## build
 - Purpose: one-stop: infer/validate config schema, regenerate dev_flows, build wasm, refresh artifacts/hashes.
 - Usage: `greentic-component build [--manifest path] [--cargo path] [--no-flow] [--no-infer-config] [--no-write-schema] [--force-write-schema] [--no-validate] [--json] [--permissive]`.
-- Behavior: unless `--no-flow`, calls the same regeneration as `flow update` (fails if required defaults are missing). Builds with cargo (override via `--cargo` or `CARGO`). Removes `config_schema` from the written manifest if it was only inferred and `--no-write-schema` is set. Emits `dist/<name>__<abi>.describe.cbor` + `.json` when `describe()` is available.
+- Behavior: unless `--no-flow`, calls the same regeneration as `flow update` (fails if required defaults are missing). Builds with cargo (override via `--cargo` or `CARGO`). For `component@0.6.0`, the canonical manifest is then embedded into the built Wasm as deterministic CBOR in the custom section `greentic.component.manifest.v1`, and the build fails if embed/write-back verification does not match the canonical manifest used for the build. Removes `config_schema` from the written manifest if it was only inferred and `--no-write-schema` is set. Emits `dist/<name>__<abi>.describe.cbor` + `.json` when `describe()` is available.
 - Tips: keep `--no-flow` off to avoid stale dev_flows; use `--json` for CI summaries; set `CARGO` to a wrapper if you need a custom toolchain.
 - Schema gate: the command refuses to build when any `operations[].input_schema`/`output_schema` is effectively empty (literal `{}`, unconstrained `{"type":"object"}`, or boolean `true`). Pass `--permissive` to keep building while emitting `W_OP_SCHEMA_EMPTY` warnings.
 
@@ -111,6 +111,7 @@ Global:
   - `manifest schema: ok` — manifest conforms to schema; fix missing/invalid fields otherwise.
   - `hash verification: ok` — manifest hash matches wasm bytes; run `greentic-component hash` or `build` after rebuilding wasm.
   - `world check: ok` — wasm metadata matches manifest `world`; rebuild with correct WIT world if it fails.
+  - `embedded_manifest` — built artifacts are expected to contain `greentic.component.manifest.v1`. Missing, malformed, or hash-mismatched embedded metadata is an error when doctor is run against a built Wasm.
   - `lifecycle exports: init=<bool> health=<bool> shutdown=<bool>` — optional lifecycle hooks present in the wasm. Implement `on_start`/`on_stop`/health in your guest bindings if your host expects them; omit if not needed.
   - `describe payload versions` — number of describe payloads embedded (typically 1).
   - `redaction hints` — `x-redact` markers. Logs/inspectors can leak secrets/PII if fields aren’t redacted; add `x-redact` to sensitive fields so hosts/tooling can mask them. “none” means nothing will be redacted automatically.
@@ -119,6 +120,7 @@ Global:
   - `capabilities declared` — wasi/host surfaces requested; keep minimal for least privilege.
   - `limits configured` — whether resource limits are present; set `limits` for guardrails.
 - Tips: run after `build` to catch hash/world drift; point `--manifest` if wasm and manifest differ; errors on validation/hash/world/lifecycle issues; pass `--permissive` to treat empty operation schemas as warnings (`W_OP_SCHEMA_EMPTY`).
+- Embedded metadata rule: if a built wasm exists, doctor now treats the embedded manifest as required artifact-local truth and compares it with the canonical external manifest and `describe()` on overlapping fields. In source-only / no-artifact contexts, the older “no wasm available” behavior still applies.
 
 ### Lifecycle exports (how-to)
 The doctor report surfaces lifecycle booleans based on your wasm. To expose them, implement the generated guest trait for your world (or use a macro) to provide `on_start`/`on_stop`/health handlers. If your host expects these hooks, add implementations; otherwise they can remain false.
@@ -128,6 +130,7 @@ Doctor output reference
 - `manifest schema: ok` — Manifest JSON validated against the published schema; fix missing/invalid fields if not ok.
 - `hash verification: ok (blake3:...)` — Manifest hash matches wasm; run `greentic-component hash`/`build` after rebuilding wasm to refresh.
 - `world check: ok (...)` — Wasm exports/metadata match manifest `world`; rebuild with the correct WIT world if it fails.
+- `embedded_manifest: ok` — The embedded `greentic.component.manifest.v1` section exists, decodes, and matches the expected payload hash.
 - `lifecycle exports: init=<bool> health=<bool> shutdown=<bool>` — Optional lifecycle hooks detected; implement guest bindings if the host expects startup/health/shutdown.
 - `describe payload versions: N` — Number of embedded describe payloads (typically 1).
 - `redaction hints: ...` — `x-redact` paths; add to sensitive fields to prevent leaking secrets/PII in logs/inspectors.

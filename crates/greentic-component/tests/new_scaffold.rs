@@ -7,6 +7,7 @@ use insta::assert_snapshot;
 use predicates::prelude::PredicateBooleanExt;
 use serde_json::Value as JsonValue;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -128,12 +129,15 @@ fn scaffold_rust_wasi_template() {
         status.success(),
         "scaffolded project should pass host tests"
     );
+    let fixture_wasm =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/manifests/bin/component.wasm");
     let cargo_wrapper = component_dir.join("fake_cargo.sh");
     std::fs::write(
         &cargo_wrapper,
-        r#"#!/bin/sh
+        format!(
+            r#"#!/bin/sh
 set -e
-if [ "${1:-}" = "component" ] && [ "${2:-}" = "--version" ]; then
+if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "--version" ]; then
   echo "cargo-component-component 0.21.1"
   exit 0
 fi
@@ -144,25 +148,27 @@ path=os.path.join(os.getcwd(),"component.manifest.json")
 try:
     with open(path, "r") as f:
         data=json.load(f)
-    print(data.get("artifacts", {}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
+    print(data.get("artifacts", {{}}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
 except Exception:
     print("target/wasm32-wasip2/release/component.wasm")
 PY
 )
 mkdir -p "$(dirname "$wasm_path")"
-printf '\0' > "$wasm_path"
+cp "{fixture_wasm}" "$wasm_path"
 
-if [ "${1:-}" = "component" ] && [ "${2:-}" = "build" ]; then
+if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "build" ]; then
   exit 0
 fi
 
-if [ "${1:-}" = "build" ]; then
+if [ "${{1:-}}" = "build" ]; then
   exit 0
 fi
 
 REAL_CARGO="$(command -v cargo)"
 "$REAL_CARGO" "$@"
 "#,
+            fixture_wasm = fixture_wasm.display()
+        ),
     )
     .expect("write cargo wrapper");
     let mut perms = std::fs::metadata(&cargo_wrapper)
@@ -269,12 +275,15 @@ fn doctor_accepts_built_scaffold_artifact() {
         .env_remove("USERNAME");
     new_cmd.assert().success();
 
+    let fixture_wasm =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/manifests/bin/component.wasm");
     let cargo_wrapper = component_dir.join("fake_cargo.sh");
     std::fs::write(
         &cargo_wrapper,
-        r#"#!/bin/sh
+        format!(
+            r#"#!/bin/sh
 set -e
-if [ "${1:-}" = "component" ] && [ "${2:-}" = "--version" ]; then
+if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "--version" ]; then
   echo "cargo-component-component 0.21.1"
   exit 0
 fi
@@ -285,25 +294,27 @@ path=os.path.join(os.getcwd(),"component.manifest.json")
 try:
     with open(path, "r") as f:
         data=json.load(f)
-    print(data.get("artifacts", {}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
+    print(data.get("artifacts", {{}}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
 except Exception:
     print("target/wasm32-wasip2/release/component.wasm")
 PY
 )
 mkdir -p "$(dirname "$wasm_path")"
-printf '\0' > "$wasm_path"
+cp "{fixture_wasm}" "$wasm_path"
 
-if [ "${1:-}" = "component" ] && [ "${2:-}" = "build" ]; then
+if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "build" ]; then
   exit 0
 fi
 
-if [ "${1:-}" = "build" ]; then
+if [ "${{1:-}}" = "build" ]; then
   exit 0
 fi
 
 REAL_CARGO="$(command -v cargo)"
 "$REAL_CARGO" "$@"
 "#,
+            fixture_wasm = fixture_wasm.display()
+        ),
     )
     .expect("write cargo wrapper");
     let mut perms = std::fs::metadata(&cargo_wrapper)

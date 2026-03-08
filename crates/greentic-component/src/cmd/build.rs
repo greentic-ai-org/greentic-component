@@ -22,6 +22,7 @@ use crate::config::{
     ConfigInferenceOptions, ConfigSchemaSource, load_manifest_with_schema, resolve_manifest_path,
 };
 use crate::describe::from_wit_world;
+use crate::embedded_descriptor::embed_and_verify_wasm;
 use crate::parse_manifest;
 use crate::path_safety::normalize_under_root;
 use crate::schema_quality::{SchemaQualityMode, validate_operation_schemas};
@@ -134,10 +135,18 @@ pub fn run(args: BuildArgs) -> Result<()> {
         .as_ref()
         .map(|outcome| outcome.manifest.clone())
         .unwrap_or_else(|| config.manifest.clone());
+    let canonical_manifest = parse_manifest(
+        &serde_json::to_string(&manifest_to_write)
+            .context("failed to serialize manifest for embedded descriptor")?,
+    )
+    .context("failed to parse canonical manifest for embedded descriptor")?;
 
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     build_wasm(manifest_dir, &cargo_bin, &manifest_to_write)?;
     check_canonical_world_export(manifest_dir, &manifest_to_write)?;
+    let wasm_path_for_embedding = resolve_wasm_path(manifest_dir, &manifest_to_write)?;
+    embed_and_verify_wasm(&wasm_path_for_embedding, &canonical_manifest)
+        .context("failed to embed canonical manifest into built wasm")?;
 
     if !config.persist_schema {
         manifest_to_write
