@@ -1,10 +1,9 @@
 ---
 source: crates/greentic-component/tests/new_scaffold.rs
-assertion_line: 81
 expression: normalize_text(manifest.trim())
 ---
 {
-  "$schema": "https://greentic-ai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
+  "$schema": "https://greenticai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
   "id": "ai.greentic.demo-component",
   "name": "demo-component",
   "version": "0.1.0",
@@ -39,14 +38,68 @@ expression: normalize_text(manifest.trim())
           }
         }
       }
+    },
+    {
+      "name": "qa-spec",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "apply-answers",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" },
+          "current_config": { "type": "object" },
+          "answers": { "type": "object" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["ok", "warnings", "errors"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "warnings": { "type": "array" },
+          "errors": { "type": "array" },
+          "config": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "i18n-keys",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
     }
   ],
   "default_operation": "handle_message",
   "config_schema": {
-    "type": "object",
+    "additionalProperties": false,
     "properties": {},
     "required": [],
-    "additionalProperties": false
+    "type": "object"
   },
   "supports": ["messaging"],
   "profiles": {
@@ -55,25 +108,21 @@ expression: normalize_text(manifest.trim())
   },
   "secret_requirements": [],
   "capabilities": {
+    "host": {
+      "secrets": {
+        "required": []
+      },
+      "telemetry": {
+        "scope": "node"
+      }
+    },
     "wasi": {
+      "clocks": true,
       "filesystem": {
         "mode": "none",
         "mounts": []
       },
-      "random": true,
-      "clocks": true
-    },
-    "host": {
-      "messaging": {
-        "inbound": true,
-        "outbound": true
-      },
-      "telemetry": {
-        "scope": "node"
-      },
-      "secrets": {
-        "required": []
-      }
+      "random": true
     }
   },
   "limits": {

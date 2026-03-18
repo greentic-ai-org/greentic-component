@@ -1,0 +1,217 @@
+use std::collections::BTreeMap;
+
+use greentic_types::cbor::canonical;
+use greentic_types::i18n_text::I18nText;
+use greentic_types::schemas::component::v0_6_0::{ComponentQaSpec, QaMode, Question, QuestionKind};
+use serde_json::{json, Value as JsonValue};
+
+// Internal normalized lifecycle semantics used by scaffolded QA operations.
+// Input compatibility accepts legacy/provision aliases via `normalize_mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalizedMode {
+    Setup,
+    Update,
+    Remove,
+}
+
+impl NormalizedMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Update => "update",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+// Compatibility mapping for mode strings from operator/flow payloads.
+pub fn normalize_mode(raw: &str) -> Option<NormalizedMode> {
+    match raw {
+        "default" | "setup" | "install" => Some(NormalizedMode::Setup),
+        "update" | "upgrade" => Some(NormalizedMode::Update),
+        "remove" => Some(NormalizedMode::Remove),
+        _ => None,
+    }
+}
+
+// CBOR output for direct provider operation compatibility.
+pub fn qa_spec_cbor(mode: NormalizedMode) -> Vec<u8> {
+    canonical::to_canonical_cbor_allow_floats(&qa_spec(mode)).unwrap_or_default()
+}
+
+// JSON output used by current operator integration paths.
+pub fn qa_spec_json(mode: NormalizedMode) -> JsonValue {
+    serde_json::to_value(qa_spec(mode)).unwrap_or_else(|_| json!({}))
+}
+
+// Primary QA authoring entrypoint.
+// Extend question sets here for your real setup/update/remove requirements.
+pub fn qa_spec(mode: NormalizedMode) -> ComponentQaSpec {
+    let (title_key, description_key, questions) = match mode {
+        NormalizedMode::Setup => (
+            "qa.install.title",
+            Some("qa.install.description"),
+            vec![
+                question("api_key", "qa.field.api_key.label", "qa.field.api_key.help", true),
+                question("region", "qa.field.region.label", "qa.field.region.help", true),
+                question(
+                    "webhook_base_url",
+                    "qa.field.webhook_base_url.label",
+                    "qa.field.webhook_base_url.help",
+                    true,
+                ),
+                question(
+                    "enabled",
+                    "qa.field.enabled.label",
+                    "qa.field.enabled.help",
+                    false,
+                ),
+            ],
+        ),
+        NormalizedMode::Update => (
+            "qa.update.title",
+            Some("qa.update.description"),
+            vec![
+                question("api_key", "qa.field.api_key.label", "qa.field.api_key.help", false),
+                question("region", "qa.field.region.label", "qa.field.region.help", false),
+                question(
+                    "webhook_base_url",
+                    "qa.field.webhook_base_url.label",
+                    "qa.field.webhook_base_url.help",
+                    false,
+                ),
+                question(
+                    "enabled",
+                    "qa.field.enabled.label",
+                    "qa.field.enabled.help",
+                    false,
+                ),
+            ],
+        ),
+        NormalizedMode::Remove => (
+            "qa.remove.title",
+            Some("qa.remove.description"),
+            vec![question(
+                "confirm_remove",
+                "qa.field.confirm_remove.label",
+                "qa.field.confirm_remove.help",
+                true,
+            )],
+        ),
+    };
+
+    ComponentQaSpec {
+        mode: match mode {
+            NormalizedMode::Setup => QaMode::Setup,
+            NormalizedMode::Update => QaMode::Update,
+            NormalizedMode::Remove => QaMode::Remove,
+        },
+        title: I18nText::new(title_key, None),
+        description: description_key.map(|key| I18nText::new(key, None)),
+        questions,
+        defaults: BTreeMap::new(),
+    }
+}
+
+fn question(id: &str, label_key: &str, help_key: &str, required: bool) -> Question {
+    Question {
+        id: id.to_string(),
+        label: I18nText::new(label_key, None),
+        help: Some(I18nText::new(help_key, None)),
+        error: None,
+        kind: QuestionKind::Text,
+        required,
+        default: None,
+    }
+}
+
+// Used by `i18n-keys` operation and contract checks in operator.
+pub fn i18n_keys() -> Vec<String> {
+    crate::i18n::all_keys()
+}
+
+// Apply answers and return operator-friendly base shape:
+// { ok, config?, warnings, errors, ...optional metadata }
+// Extend this method for domain validation rules and config patching.
+pub fn apply_answers(mode: NormalizedMode, payload: &JsonValue) -> JsonValue {
+    let answers = payload
+        .get("answers")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let current_config = payload
+        .get("current_config")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let mut errors = Vec::new();
+    match mode {
+        NormalizedMode::Setup => {
+            for key in ["api_key", "region", "webhook_base_url"] {
+                if answers.get(key).and_then(|v| v.as_str()).is_none() {
+                    errors.push(json!({
+                        "key": "qa.error.required",
+                        "msg_key": "qa.error.required",
+                        "fields": [key]
+                    }));
+                }
+            }
+        }
+        NormalizedMode::Remove => {
+            if answers
+                .get("confirm_remove")
+                .and_then(|v| v.as_str())
+                .map(|v| v != "true")
+                .unwrap_or(true)
+            {
+                errors.push(json!({
+                    "key": "qa.error.remove_confirmation",
+                    "msg_key": "qa.error.remove_confirmation",
+                    "fields": ["confirm_remove"]
+                }));
+            }
+        }
+        NormalizedMode::Update => {}
+    }
+
+    if !errors.is_empty() {
+        return json!({
+            "ok": false,
+            "warnings": [],
+            "errors": errors,
+            "meta": {
+                "mode": mode.as_str(),
+                "version": "v1"
+            }
+        });
+    }
+
+    let mut config = match current_config {
+        JsonValue::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    if let JsonValue::Object(map) = answers {
+        for (key, value) in map {
+            config.insert(key, value);
+        }
+    }
+
+    if mode == NormalizedMode::Remove {
+        config.insert("enabled".to_string(), JsonValue::Bool(false));
+    }
+
+    json!({
+        "ok": true,
+        "config": config,
+        "warnings": [],
+        "errors": [],
+        "meta": {
+            "mode": mode.as_str(),
+            "version": "v1"
+        },
+        "audit": {
+            "reasons": ["qa.apply_answers"],
+            "timings_ms": {}
+        }
+    })
+}

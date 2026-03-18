@@ -1,27 +1,27 @@
 ---
 source: crates/greentic-component/tests/wizard_provider_tests.rs
-assertion_line: 114
+assertion_line: 120
 expression: snap
 ---
 {
   "plan_version": 1,
   "generator": "greentic-component/wizard-provider",
   "template_version": "component-scaffold-v0.6.0",
-  "template_digest_blake3": "2c8f6ba5c5ed7474ff6c201046181fd2073a9193d428f6f7b117fb86a70609c1",
+  "template_digest_blake3": "5d2ab9d7067902b21ce5580c41d69cf06e66e496b6d30b76d3d3a32625e8d6ea",
   "requested_abi_version": "0.6.0",
   "step_count": 2,
   "steps": [
     {
       "kind": "ensure_dir",
-      "path": "assets/i18n,src",
+      "path": "assets/i18n,schemas,src,tools",
       "size": null,
       "blake3": null
     },
     {
       "kind": "write_files",
-      "path": "Cargo.toml,Makefile,README.md,assets/i18n/en.json,component.manifest.json,rust-toolchain.toml,src/descriptor.rs,src/i18n.rs,src/lib.rs,src/qa.rs,src/runtime.rs,src/schema.rs",
-      "size": 17288,
-      "blake3": "1b5663389c847f2ddeba576f9a4a793cc8076ca2bc4c172016a389ff15902ed4"
+      "path": "Cargo.toml,Makefile,README.md,assets/i18n/en.json,assets/i18n/locales.json,build.rs,component.manifest.json,rust-toolchain.toml,schemas/component.schema.json,src/i18n.rs,src/i18n_bundle.rs,src/lib.rs,src/qa.rs,tools/i18n.sh",
+      "size": 34654,
+      "blake3": "01e2dd7c0eabe28a7e6a94b656c71320b19f815669b60c3b04d0a8d7cf02f71c"
     }
   ]
 }

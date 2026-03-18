@@ -237,8 +237,8 @@ schema_check() {
     fi
     step "Schema drift check"
     local remote=/tmp/local-check-schema.json
-    local schema_url="https://greentic-ai-org.github.io/greentic-component/schemas/v1/component.manifest.schema.json"
-    if [[ "$schema_url" == *"greentic-ai.github.io"* ]]; then
+    local schema_url="https://greenticai.github.io/greentic-component/schemas/v1/component.manifest.schema.json"
+    if [[ "$schema_url" == *"greenticai-org.github.io"* ]]; then
         echo "[fail] schema drift check (legacy host configured: $schema_url)"
         record_failure "schema drift check (legacy host configured)"
         return 0
@@ -524,7 +524,7 @@ run_wizard_smoke() {
     local wizard_manifest="$wizard_root/component.manifest.json"
     if [ -f "$wizard_manifest" ]; then
         if grep -q "component_v0_6::node" "$wizard_root/src/lib.rs"; then
-            run_cmd "wizard wasm (make)" env CARGO_NET_OFFLINE=true make -C "$wizard_root" wasm
+            run_cmd "wizard wasm (make)" env CARGO_NET_OFFLINE=true GREENTIC_COMPONENT="$BIN_GREENTIC_COMPONENT" make -C "$wizard_root" wasm
             local wizard_wasm_rel
             wizard_wasm_rel=$(jq -r '.artifacts.component_wasm // empty' "$wizard_manifest")
             if [ -n "$wizard_wasm_rel" ] && [ "$wizard_wasm_rel" != "null" ]; then
@@ -557,7 +557,8 @@ run_wizard_smoke() {
                     fi
                 fi
                 if [ -f "$wizard_wasm_path" ]; then
-                    run_bin_cmd "wizard update manifest hash" "$BIN_COMPONENT_HASH" "$wizard_manifest"
+                    run_bin_cmd "wizard update manifest hash" "$BIN_COMPONENT_HASH" \
+                        "$wizard_manifest" --wasm "$wizard_wasm_path"
                     run_bin_cmd "wizard inspect (wasm)" "$BIN_COMPONENT_INSPECT" \
                         "$wizard_wasm_path" --manifest "$wizard_manifest" --json --verify
                 else
