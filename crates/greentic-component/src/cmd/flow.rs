@@ -108,7 +108,8 @@ pub fn update_with_manifest(config: &ConfigOutcome) -> Result<FlowUpdateOutcome>
     let component_name = manifest_component_name(&config.manifest)?;
     let _node_kind = resolve_node_kind(&config.manifest)?;
     let operation = resolve_operation(&config.manifest, component_id)?;
-    let input_schema = load_operation_input_schema(&config.manifest_path, &config.manifest, &operation)?;
+    let input_schema =
+        load_operation_input_schema(&config.manifest_path, &config.manifest, &operation)?;
 
     validate_config_schema(&config.schema)
         .map_err(|err| anyhow!("config_schema failed validation: {err}"))?;

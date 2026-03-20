@@ -16,6 +16,91 @@ mod snapshot_util;
 
 use snapshot_util::normalize_text;
 
+fn cargo_component_available() -> bool {
+    Command::new("cargo")
+        .args(["component", "--version"])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn wasm_target_available() -> bool {
+    Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("wasm32-wasip2")
+        })
+}
+
+fn install_cargo_wrapper(root: &Path) -> std::path::PathBuf {
+    let bin_dir = root.join("test-bin");
+    fs::create_dir_all(&bin_dir).expect("create test bin");
+    let wrapper_path = bin_dir.join("cargo");
+    let greentic_component_path = bin_dir.join("greentic-component");
+    let real_cargo = Command::new("rustup")
+        .args(["which", "cargo"])
+        .output()
+        .or_else(|_| {
+            Command::new("bash")
+                .args(["-lc", "command -v cargo"])
+                .output()
+        })
+        .expect("locate cargo");
+    assert!(real_cargo.status.success(), "cargo should be available");
+    let real_cargo = String::from_utf8(real_cargo.stdout)
+        .expect("cargo path utf8")
+        .trim()
+        .to_string();
+    let real_component = Command::new("bash")
+        .args(["-lc", "command -v cargo-component"])
+        .output()
+        .expect("locate cargo-component");
+    assert!(
+        real_component.status.success(),
+        "cargo-component should be available for scaffold smoke test"
+    );
+    let real_component = String::from_utf8(real_component.stdout)
+        .expect("cargo-component path utf8")
+        .trim()
+        .to_string();
+    fs::write(
+        &wrapper_path,
+        format!(
+            "#!/bin/sh\nset -eu\nif [ \"${{1:-}}\" = \"component\" ]; then\n  shift\n  exec \"{real_component}\" \"$@\"\nfi\nexec \"{real_cargo}\" \"$@\"\n"
+        ),
+    )
+    .expect("write cargo wrapper");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&wrapper_path)
+            .expect("cargo wrapper metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&wrapper_path, perms).expect("chmod cargo wrapper");
+    }
+    fs::write(
+        &greentic_component_path,
+        format!(
+            "#!/bin/sh\nset -eu\nexec \"{}\" \"$@\"\n",
+            assert_cmd::cargo::cargo_bin!("greentic-component").display()
+        ),
+    )
+    .expect("write greentic-component wrapper");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&greentic_component_path)
+            .expect("greentic-component wrapper metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&greentic_component_path, perms)
+            .expect("chmod greentic-component wrapper");
+    }
+    bin_dir
+}
+
 #[test]
 fn scaffold_rust_wasi_template() {
     let temp = TempDir::new().expect("temp dir");
@@ -129,71 +214,29 @@ fn scaffold_rust_wasi_template() {
         status.success(),
         "scaffolded project should pass host tests"
     );
-    let fixture_wasm =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/manifests/bin/component.wasm");
-    let cargo_wrapper = component_dir.join("fake_cargo.sh");
-    std::fs::write(
-        &cargo_wrapper,
-        format!(
-            r#"#!/bin/sh
-set -e
-if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "--version" ]; then
-  echo "cargo-component-component 0.21.1"
-  exit 0
-fi
+    if cargo_component_available() && wasm_target_available() {
+        let cargo_wrapper_dir = install_cargo_wrapper(temp.path());
+        let path_env = format!(
+            "{}:{}",
+            cargo_wrapper_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut build = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+        build
+            .current_dir(&component_dir)
+            .env("PATH", &path_env)
+            .env("CARGO_NET_OFFLINE", "true")
+            .arg("build");
+        build.assert().success();
 
-wasm_path=$(python3 - <<'PY'
-import json, os
-path=os.path.join(os.getcwd(),"component.manifest.json")
-try:
-    with open(path, "r") as f:
-        data=json.load(f)
-    print(data.get("artifacts", {{}}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
-except Exception:
-    print("target/wasm32-wasip2/release/component.wasm")
-PY
-)
-mkdir -p "$(dirname "$wasm_path")"
-cp "{fixture_wasm}" "$wasm_path"
-
-if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "build" ]; then
-  exit 0
-fi
-
-if [ "${{1:-}}" = "build" ]; then
-  exit 0
-fi
-
-REAL_CARGO="$(command -v cargo)"
-"$REAL_CARGO" "$@"
-"#,
-            fixture_wasm = fixture_wasm.display()
-        ),
-    )
-    .expect("write cargo wrapper");
-    let mut perms = std::fs::metadata(&cargo_wrapper)
-        .expect("metadata")
-        .permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&cargo_wrapper, perms).expect("chmod");
+        let mut doctor = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
+        doctor
+            .current_dir(&component_dir)
+            .env("PATH", &path_env)
+            .arg("doctor")
+            .arg(".");
+        doctor.assert().success();
     }
-    let mut build = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
-    build
-        .current_dir(&component_dir)
-        .env("CARGO", &cargo_wrapper)
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("GREENTIC_SKIP_NODE_EXPORT_CHECK", "1")
-        .arg("build");
-    build.assert().success();
-    let mut doctor = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
-    doctor.current_dir(&component_dir).arg("doctor").arg(".");
-    doctor.assert().failure().stderr(
-        predicates::str::contains("unable to resolve wasm")
-            .or(predicates::str::contains("failed to load component")),
-    );
     assert!(
         component_dir.join(".git").exists(),
         "post-render hook should initialize git"
@@ -250,8 +293,20 @@ fn doctor_validates_canonical_worlds_for_scaffold() {
 
 #[test]
 fn doctor_accepts_built_scaffold_artifact() {
+    if !cargo_component_available() || !wasm_target_available() {
+        eprintln!(
+            "skipping built scaffold doctor smoke test: cargo-component or wasm32-wasip2 missing"
+        );
+        return;
+    }
     let temp = TempDir::new().expect("temp dir");
     let component_dir = temp.path().join("artifact-component");
+    let cargo_wrapper_dir = install_cargo_wrapper(temp.path());
+    let path_env = format!(
+        "{}:{}",
+        cargo_wrapper_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let mut new_cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
     new_cmd
         .arg("new")
@@ -270,67 +325,16 @@ fn doctor_accepts_built_scaffold_artifact() {
         .env("GIT_AUTHOR_EMAIL", "greentic-labs@example.com")
         .env("GIT_COMMITTER_NAME", "Greentic Labs")
         .env("GIT_COMMITTER_EMAIL", "greentic-labs@example.com")
+        .env("PATH", &path_env)
         .env("CARGO_NET_OFFLINE", "true")
         .env_remove("USER")
         .env_remove("USERNAME");
     new_cmd.assert().success();
 
-    let fixture_wasm =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/manifests/bin/component.wasm");
-    let cargo_wrapper = component_dir.join("fake_cargo.sh");
-    std::fs::write(
-        &cargo_wrapper,
-        format!(
-            r#"#!/bin/sh
-set -e
-if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "--version" ]; then
-  echo "cargo-component-component 0.21.1"
-  exit 0
-fi
-
-wasm_path=$(python3 - <<'PY'
-import json, os
-path=os.path.join(os.getcwd(),"component.manifest.json")
-try:
-    with open(path, "r") as f:
-        data=json.load(f)
-    print(data.get("artifacts", {{}}).get("component_wasm") or "target/wasm32-wasip2/release/component.wasm")
-except Exception:
-    print("target/wasm32-wasip2/release/component.wasm")
-PY
-)
-mkdir -p "$(dirname "$wasm_path")"
-cp "{fixture_wasm}" "$wasm_path"
-
-if [ "${{1:-}}" = "component" ] && [ "${{2:-}}" = "build" ]; then
-  exit 0
-fi
-
-if [ "${{1:-}}" = "build" ]; then
-  exit 0
-fi
-
-REAL_CARGO="$(command -v cargo)"
-"$REAL_CARGO" "$@"
-"#,
-            fixture_wasm = fixture_wasm.display()
-        ),
-    )
-    .expect("write cargo wrapper");
-    let mut perms = std::fs::metadata(&cargo_wrapper)
-        .expect("metadata")
-        .permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&cargo_wrapper, perms).expect("chmod");
-    }
-
     let mut build_cmd = Command::new(assert_cmd::cargo::cargo_bin!("greentic-component"));
     build_cmd
         .current_dir(&component_dir)
-        .env("CARGO", &cargo_wrapper)
+        .env("PATH", &path_env)
         .env("GREENTIC_SKIP_NODE_EXPORT_CHECK", "1")
         .arg("build")
         .arg("--no-flow")
@@ -359,12 +363,11 @@ REAL_CARGO="$(command -v cargo)"
     doctor
         .current_dir(&component_dir)
         .arg(wasm_uri)
+        .arg("--manifest")
+        .arg("component.manifest.json")
+        .env("PATH", &path_env)
         .env("CARGO_NET_OFFLINE", "true");
-    doctor.assert().failure().stderr(
-        predicates::str::contains("doctor checks failed")
-            .or(predicates::str::contains("unable to resolve wasm"))
-            .or(predicates::str::contains("failed to load component")),
-    );
+    doctor.assert().success();
 }
 
 #[test]

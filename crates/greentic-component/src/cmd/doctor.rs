@@ -1677,9 +1677,8 @@ mod tests {
     use super::*;
     use greentic_types::i18n_text::I18nText;
     use greentic_types::schemas::component::v0_6_0::{
-        ChoiceOption, ComponentDescribe, ComponentInfo, ComponentOperation, ComponentQaSpec,
-        ComponentRunInput, ComponentRunOutput, QaMode, Question, QuestionKind, RedactionKind,
-        RedactionRule,
+        ComponentDescribe, ComponentInfo, ComponentOperation, ComponentQaSpec, ComponentRunInput,
+        ComponentRunOutput, QaMode, RedactionKind, RedactionRule,
     };
     use serde_json::json;
 
@@ -1924,20 +1923,24 @@ mod tests {
             mode: QaMode::Default,
             title: I18nText::new("qa.title", None),
             description: Some(I18nText::new("qa.desc", None)),
-            questions: vec![Question {
-                id: "name".to_string(),
-                label: I18nText::new("qa.question.name", None),
-                help: None,
-                error: None,
-                kind: QuestionKind::Choice {
-                    options: vec![ChoiceOption {
-                        value: "one".to_string(),
-                        label: I18nText::new("qa.option.one", None),
-                    }],
-                },
-                required: true,
-                default: None,
-            }],
+            questions: vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "name",
+                    "label": I18nText::new("qa.question.name", None),
+                    "help": null,
+                    "error": null,
+                    "kind": {
+                        "type": "choice",
+                        "options": [{
+                            "value": "one",
+                            "label": I18nText::new("qa.option.one", None)
+                        }]
+                    },
+                    "required": true,
+                    "default": null
+                }))
+                .expect("question should deserialize"),
+            ],
             defaults: BTreeMap::new(),
         };
         let mut qa_specs = BTreeMap::new();

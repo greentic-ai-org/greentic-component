@@ -6,9 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use ciborium::Value as CborValue;
 use greentic_types::cbor::canonical;
 use greentic_types::i18n_text::I18nText;
-use greentic_types::schemas::component::v0_6_0::{
-    ChoiceOption, ComponentQaSpec, QaMode, Question, QuestionKind,
-};
+use greentic_types::schemas::component::v0_6_0::{ChoiceOption, ComponentQaSpec, QaMode, Question};
 use serde::Serialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -21,6 +19,55 @@ use crate::scaffold::runtime_capabilities::RuntimeCapabilitiesInput;
 pub const PLAN_VERSION: u32 = 1;
 pub const TEMPLATE_VERSION: &str = "component-scaffold-v0.6.0";
 pub const GENERATOR_ID: &str = "greentic-component/wizard-provider";
+
+fn question(id: &str, label_key: &str, help_key: &str, required: bool) -> Question {
+    question_json(json!({
+        "id": id,
+        "label": I18nText::new(label_key, None),
+        "help": I18nText::new(help_key, None),
+        "error": null,
+        "kind": { "type": "text" },
+        "required": required,
+        "default": null
+    }))
+}
+
+fn question_bool(id: &str, label_key: &str, help_key: &str, required: bool) -> Question {
+    question_json(json!({
+        "id": id,
+        "label": I18nText::new(label_key, None),
+        "help": I18nText::new(help_key, None),
+        "error": null,
+        "kind": { "type": "bool" },
+        "required": required,
+        "default": null
+    }))
+}
+
+fn question_choice(
+    id: &str,
+    label_key: &str,
+    help_key: &str,
+    required: bool,
+    options: Vec<ChoiceOption>,
+) -> Question {
+    question_json(json!({
+        "id": id,
+        "label": I18nText::new(label_key, None),
+        "help": I18nText::new(help_key, None),
+        "error": null,
+        "kind": {
+            "type": "choice",
+            "options": options
+        },
+        "required": required,
+        "default": null
+    }))
+}
+
+fn question_json(value: JsonValue) -> Question {
+    serde_json::from_value(value).expect("question should deserialize")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum WizardMode {
@@ -124,56 +171,40 @@ pub fn spec_scaffold(mode: WizardMode) -> ComponentQaSpec {
         title: I18nText::new(title, None),
         description: Some(I18nText::new("wizard.component.description", None)),
         questions: vec![
-            Question {
-                id: "component.name".to_string(),
-                label: I18nText::new("wizard.component.name.label", None),
-                help: Some(I18nText::new("wizard.component.name.help", None)),
-                error: None,
-                kind: QuestionKind::Text,
-                required: true,
-                default: None,
-            },
-            Question {
-                id: "component.path".to_string(),
-                label: I18nText::new("wizard.component.path.label", None),
-                help: Some(I18nText::new("wizard.component.path.help", None)),
-                error: None,
-                kind: QuestionKind::Text,
-                required: false,
-                default: None,
-            },
-            Question {
-                id: "component.kind".to_string(),
-                label: I18nText::new("wizard.component.kind.label", None),
-                help: Some(I18nText::new("wizard.component.kind.help", None)),
-                error: None,
-                kind: QuestionKind::Choice {
-                    options: vec![
-                        ChoiceOption {
-                            value: "tool".to_string(),
-                            label: I18nText::new("wizard.component.kind.option.tool", None),
-                        },
-                        ChoiceOption {
-                            value: "source".to_string(),
-                            label: I18nText::new("wizard.component.kind.option.source", None),
-                        },
-                    ],
-                },
-                required: false,
-                default: None,
-            },
-            Question {
-                id: "component.features.enabled".to_string(),
-                label: I18nText::new("wizard.component.features.enabled.label", None),
-                help: Some(I18nText::new(
-                    "wizard.component.features.enabled.help",
-                    None,
-                )),
-                error: None,
-                kind: QuestionKind::Bool,
-                required: false,
-                default: None,
-            },
+            question(
+                "component.name",
+                "wizard.component.name.label",
+                "wizard.component.name.help",
+                true,
+            ),
+            question(
+                "component.path",
+                "wizard.component.path.label",
+                "wizard.component.path.help",
+                false,
+            ),
+            question_choice(
+                "component.kind",
+                "wizard.component.kind.label",
+                "wizard.component.kind.help",
+                false,
+                vec![
+                    ChoiceOption {
+                        value: "tool".to_string(),
+                        label: I18nText::new("wizard.component.kind.option.tool", None),
+                    },
+                    ChoiceOption {
+                        value: "source".to_string(),
+                        label: I18nText::new("wizard.component.kind.option.source", None),
+                    },
+                ],
+            ),
+            question_bool(
+                "component.features.enabled",
+                "wizard.component.features.enabled.label",
+                "wizard.component.features.enabled.help",
+                false,
+            ),
         ],
         defaults: BTreeMap::from([(
             "component.features.enabled".to_string(),
@@ -1135,7 +1166,7 @@ fn render_lib_user_describe_ops(context: &WizardContext) -> String {
 
 fn render_qa_rs() -> String {
     r#"use greentic_types::i18n_text::I18nText;
-use greentic_types::schemas::component::v0_6_0::{QaMode, Question, QuestionKind};
+use greentic_types::schemas::component::v0_6_0::{QaMode, Question};
 use serde_json::{json, Value as JsonValue};
 
 // Internal normalized lifecycle semantics used by scaffolded QA operations.
@@ -1227,15 +1258,16 @@ pub fn qa_spec_json(mode: NormalizedMode) -> JsonValue {
 }
 
 fn question(id: &str, label_key: &str, help_key: &str, required: bool) -> Question {
-    Question {
-        id: id.to_string(),
-        label: I18nText::new(label_key, None),
-        help: Some(I18nText::new(help_key, None)),
-        error: None,
-        kind: QuestionKind::Text,
-        required,
-        default: None,
-    }
+    serde_json::from_value(json!({
+        "id": id,
+        "label": I18nText::new(label_key, None),
+        "help": I18nText::new(help_key, None),
+        "error": null,
+        "kind": { "type": "text" },
+        "required": required,
+        "default": null
+    }))
+    .expect("question should deserialize")
 }
 
 // Used by `i18n-keys` operation and contract checks in operator.

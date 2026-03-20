@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::cmd::i18n;
 use crate::path_safety::normalize_under_root;
-use greentic_distributor_client::{DistClient, DistOptions};
+use greentic_distributor_client::{CachePolicy, DistClient, DistOptions, ResolvePolicy};
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum StoreCommand {
@@ -43,8 +43,12 @@ fn fetch(args: StoreFetchArgs) -> Result<()> {
     let client = DistClient::new(opts);
     let rt =
         tokio::runtime::Runtime::new().context(i18n::tr_lit("failed to create async runtime"))?;
+    let parsed = client.parse_source(&source)?;
     let resolved = rt
-        .block_on(async { client.ensure_cached(&source).await })
+        .block_on(async {
+            let descriptor = client.resolve(parsed, ResolvePolicy).await?;
+            client.fetch(&descriptor, CachePolicy).await
+        })
         .context(i18n::tr_lit("store fetch failed"))?;
     let cache_path = resolved
         .cache_path
