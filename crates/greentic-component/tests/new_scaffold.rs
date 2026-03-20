@@ -234,6 +234,8 @@ fn scaffold_rust_wasi_template() {
             .current_dir(&component_dir)
             .env("PATH", &path_env)
             .arg("doctor")
+            .arg("--manifest")
+            .arg("component.manifest.json")
             .arg(".");
         doctor.assert().success();
     }
